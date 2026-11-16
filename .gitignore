@@ -1,0 +1,22 @@
+# 构建产物
+bin/
+dist/
+*.test
+*.out
+coverage.*
+
+# 本地工具缓存
+.impeccable/
+.claude/
+
+# 编辑器与系统
+.idea/
+.vscode/
+.DS_Store
+
+# 本地配置与密钥
+.env
+.env.*
+*.local
+*.log
+.superpowers/

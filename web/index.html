@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="vigil-token" content="__VIGIL_TOKEN__">
+  <title>Vigil</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <meta name="theme-color" content="#060a13">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Serif+SC:wght@600;900&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="sky" aria-hidden="true"></div>
+  <header class="top">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <h1>Vigil</h1>
+    </div>
+    <p class="headline" id="headline" data-i18n="conn.connecting"></p>
+    <div class="top-right">
+      <button class="lang icon-btn" id="settings" type="button" aria-haspopup="dialog" aria-expanded="false" data-i18n-title="settings.title" data-i18n-aria-label="settings.title">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+      <span class="conn" id="conn" data-i18n-title="conn.title">●</span>
+      <span class="clock" id="clock">--:--</span>
+    </div>
+  </header>
+
+  <main class="stage">
+    <section class="observatory" data-i18n-aria-label="dial.aria">
+      <svg id="dial" viewBox="0 0 640 640" role="img" data-i18n-aria-label="dial.svgAria"></svg>
+      <div class="tip" id="tip" hidden></div>
+      <ul class="legend" id="legend" data-i18n-aria-label="legend.aria"></ul>
+    </section>
+
+    <section class="roster">
+      <div class="needs" id="needs"></div>
+      <div class="roster-head">
+        <h2 data-i18n="roster.title"></h2>
+        <button class="ghost" id="forge-open" type="button" data-i18n="roster.new"></button>
+      </div>
+      <ol class="tasks" id="tasks"></ol>
+      <p class="empty" id="empty" hidden data-i18n="roster.empty"></p>
+      <div class="problems" id="problems"></div>
+    </section>
+  </main>
+
+  <aside class="drawer" id="drawer" aria-hidden="true">
+    <div class="drawer-scrim" data-close></div>
+    <div class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="d-title">
+      <div id="detail"></div>
+    </div>
+  </aside>
+
+  <div class="forge" id="forge" hidden>
+    <div class="forge-scrim" data-close></div>
+    <div class="forge-panel" role="dialog" aria-modal="true" aria-labelledby="forge-title">
+      <div id="forge-body"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

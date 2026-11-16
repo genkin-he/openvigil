@@ -1,0 +1,28 @@
+id: self-evolve
+name: 自进化
+enabled: true
+mode: headless
+trigger:
+    kind: cron
+    cron: 30 21 * * *
+agent:
+    kind: claude
+    cwd: ~/.vigil
+    permission_mode: auto
+    disallowed_tools:
+        - Bash(git push:*)
+        - Bash(git commit:*)
+session:
+    mode: fresh
+    rotate_every: 8
+run:
+    timeout: 40m0s
+    catch_up: once
+    retry:
+        max: 1
+        backoff: 10m0s
+evolve: propose
+notify:
+    "on":
+        - fail
+        - needs_you
