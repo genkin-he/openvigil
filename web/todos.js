@@ -3,6 +3,7 @@ import { h, api, toast, hm, mdhm, richText } from "./util.js";
 import { t } from "./i18n.js";
 import { draftField, clearDrafts } from "./drafts.js";
 import { replayFold } from "./trust.js";
+import { getPrefs, setPrefs, openMigrate } from "./settings.js";
 
 // Only these schemes become a link; anything else from an agent stays text.
 const SAFE_LINK = /^(https?:\/\/|slack:\/\/)/i;
@@ -72,7 +73,8 @@ function systemCard(it, taskNames, onChange) {
     h("div", { class: "options" },
       h("button", { class: "option rec", type: "button", disabled: running,
         text: t(running ? "todo.recheckRunning" : "todo.recheck"), onclick: () => act("instruct") }),
-      h("button", { class: "option", type: "button", text: t("todo.mute"), onclick: () => act("dismiss", t("todo.muted")) })));
+      h("button", { class: "option", type: "button", text: t("todo.mute"), onclick: () => act("dismiss", t("todo.muted")) }),
+      h("button", { class: "option", type: "button", text: t("mig.fullCheck"), title: t("mig.fullCheckTitle"), onclick: openMigrate })));
   return card;
 }
 
@@ -191,6 +193,34 @@ function dismissButtons(label, submit) {
     h("button", { class: "option", type: "button", text: t(key), onclick: () => submit("dismiss", "", reason) }));
 }
 
+/** Stops waiting on a follow-up: it is closed and no longer handed back to its task. */
+/** An owner's "check now" shows on the row for this long, or until the list next refreshes after it settles. */
+const FOLLOW_CHECK_SHOWN_MS = 10 * 60 * 1000;
+
+const isChecking = (f) => Boolean(f.checked_at) && Date.now() - new Date(f.checked_at).getTime() < FOLLOW_CHECK_SHOWN_MS;
+
+async function checkFollow(f, row, btn) {
+  btn.disabled = true;
+  try {
+    await api("POST", `/api/follows/${encodeURIComponent(f.id)}/check`);
+    row.classList.add("is-checking");
+  } catch (err) {
+    btn.disabled = false;
+    toast(err.message, true);
+  }
+}
+
+async function dropFollow(f, row, btn) {
+  btn.disabled = true;
+  try {
+    await api("POST", `/api/follows/${encodeURIComponent(f.id)}/done`, { outcome: t("follow.dropped") });
+    row.remove();
+  } catch (err) {
+    btn.disabled = false;
+    toast(err.message, true);
+  }
+}
+
 /**
  * What Vigil is waiting for from other people on the owner's behalf; due items go back to their task.
  * @param {Array} follows open follow-ups from /api/overview, soonest first
@@ -204,13 +234,24 @@ export function followList(follows, taskNames) {
     const link = f.link && SAFE_LINK.test(f.link)
       ? h("a", { class: "ext", href: f.link, target: "_blank", rel: "noopener noreferrer", text: f.title })
       : h("span", { text: f.title });
-    return h("li", { class: overdue ? "follow is-due" : "follow" },
+    const checking = isChecking(f);
+    const row = h("li", { class: ["follow", overdue && "is-due", checking && "is-checking"].filter(Boolean).join(" ") },
       link,
-      h("span", { class: "follow-meta", text: t("follow.meta", {
-        who: f.who || "—", task: taskNames.get(f.task) || f.task, due: mdhm(new Date(f.due)), nudges: f.nudges || 0 }) }));
+      h("span", { class: "follow-meta" },
+        t("follow.meta", { who: f.who || "—", task: taskNames.get(f.task) || f.task, due: mdhm(new Date(f.due)), nudges: f.nudges || 0 }),
+        h("span", { class: "follow-checking", text: " · " + t("follow.checking") })),
+      h("span", { class: "follow-actions" },
+        h("button", { class: "follow-btn follow-check", type: "button", text: "✓", title: t("follow.check"), "aria-label": t("follow.check"),
+          disabled: checking, onclick: (e) => checkFollow(f, row, e.currentTarget) }),
+        h("button", { class: "follow-btn follow-drop", type: "button", text: "×", title: t("follow.drop"), "aria-label": t("follow.drop"),
+          onclick: (e) => dropFollow(f, row, e.currentTarget) })));
+    return row;
   });
-  return h("details", { class: "follows" },
+  // Remember whether the owner left the list open, so a refresh or reload does not fold it again.
+  const fold = h("details", { class: "follows", open: getPrefs().followsOpen },
     h("summary", { text: t("follow.title", { n: follows.length }) }),
     h("ul", {}, ...rows));
+  fold.addEventListener("toggle", () => setPrefs({ followsOpen: fold.open }));
+  return fold;
 }
 

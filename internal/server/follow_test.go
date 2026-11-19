@@ -228,3 +228,42 @@ func TestFollowsOnlyChaseInWorkingHours(t *testing.T) {
 		t.Fatal("not chased on Monday morning")
 	}
 }
+
+func TestOwnerCanAskTheTaskToCheckAFollowNow(t *testing.T) {
+	s, h := newServer(t)
+	do(h, "POST", "/api/tasks", applyJSON("id: slack\nname: Slack\nenabled: true\ntrigger: {kind: manual}\n"), true)
+	now := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	s.Now = func() time.Time { return now }
+	_, env := do(h, "POST", "/api/follows", `{"task":"slack","title":"阿木重跑发布流水线的最后一步","who":"阿木","due":"4h"}`, true)
+	f := decodeData[Follow](t, env.Data)
+
+	// Long before it is due, the owner says it may be done: the task checks now.
+	rec, env := do(h, "POST", "/api/follows/"+f.ID+"/check", "", true)
+	if rec.Code != 200 {
+		t.Fatalf("check = %d", rec.Code)
+	}
+	if got := decodeData[Follow](t, env.Data); !got.Checked.Equal(now) || got.Hands != 0 || !got.Due.Equal(f.Due) {
+		t.Fatalf("after check = %+v", got)
+	}
+	s.Engine.Wait()
+	runs, _ := s.Store.Runs("slack", 0)
+	if len(runs) != 1 || !strings.Contains(runs[0].Input, f.ID) || !strings.Contains(runs[0].Input, "follow done "+f.ID) ||
+		!strings.Contains(runs[0].Input, "不要追问") {
+		t.Fatalf("runs = %+v", runs)
+	}
+
+	// A second click right away is refused; a while later it may check again.
+	if rec, _ := do(h, "POST", "/api/follows/"+f.ID+"/check", "", true); rec.Code != 400 {
+		t.Fatalf("double check = %d", rec.Code)
+	}
+	now = now.Add(followCheckGap + time.Second)
+	if rec, _ := do(h, "POST", "/api/follows/"+f.ID+"/check", "", true); rec.Code != 200 {
+		t.Fatalf("later check = %d", rec.Code)
+	}
+	s.Engine.Wait()
+
+	do(h, "POST", "/api/follows/"+f.ID+"/done", `{"outcome":"已点"}`, true)
+	if rec, _ := do(h, "POST", "/api/follows/"+f.ID+"/check", "", true); rec.Code != 400 {
+		t.Fatalf("check on a closed follow = %d", rec.Code)
+	}
+}

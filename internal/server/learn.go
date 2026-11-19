@@ -64,6 +64,11 @@ func decisionFor(it inbox.Item, mode, text string) string {
 
 // learn records the decision and, when it completes a streak, suggests a rule.
 func (s *Server) learn(it inbox.Item, decision string) {
+	s.learnFrom(it, decision, true)
+}
+
+// learnFrom is learn with a say on whether the decision is feedback worth waking the evolver for.
+func (s *Server) learnFrom(it inbox.Item, decision string, feedback bool) {
 	if it.Kind == "" || it.TaskID == inbox.SystemTask || isDecisionCard(it) {
 		return
 	}
@@ -71,7 +76,7 @@ func (s *Server) learn(it inbox.Item, decision string) {
 		s.logf("todo %s: record decision: %v", it.ID, err)
 		return
 	}
-	if fb := feedbackFor(it, decision); fb != "" {
+	if fb := feedbackFor(it, decision); feedback && fb != "" {
 		s.wakeEvolve(fb)
 	}
 	s.proposeFor(it.TaskID, it.Kind)
@@ -86,7 +91,7 @@ func (s *Server) proposeFor(taskID, kind string) {
 		return
 	}
 	memory, _ := s.Store.ReadDoc(taskID, "memory.md")
-	k, ok := kindTrust(trustFor(items, memory, taskID, s.Now()), kind)
+	k, ok := kindTrust(trustFor(items, memory, s.handReplies(), taskID, s.Now()), kind)
 	if !ok {
 		return
 	}
@@ -139,7 +144,7 @@ func (s *Server) proposeRevoke(items []inbox.Item, memory, taskID, kind string) 
 			since = append(since, it)
 		}
 	}
-	k, ok := kindTrust(trustFor(since, memory, taskID, s.Now()), kind)
+	k, ok := kindTrust(trustFor(since, memory, s.handReplies(), taskID, s.Now()), kind)
 	if !ok || k.Drafted < revokeMin || k.Adoption >= revokeAdoption {
 		return
 	}

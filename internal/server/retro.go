@@ -11,6 +11,7 @@ import (
 
 	"vigil/internal/inbox"
 	"vigil/internal/store"
+	"vigil/internal/task"
 )
 
 // The retro endpoint gathers a period's facts in one call, for the weekly review task to read.
@@ -52,6 +53,17 @@ type retroTask struct {
 	Failures  []retroCause   `json:"failure_causes,omitempty"`
 	NeedsYou  []retroCause   `json:"needs_you,omitempty"`
 	Proposals int            `json:"pending_proposals"`
+	Output    retroOutput    `json:"output"`
+}
+
+// retroOutput is what a task produced for its cost: what its runs reported making (MRs, comments,
+// tickets), replies it sent as the owner, and to-dos whose draft the owner sent (as is or edited).
+type retroOutput struct {
+	Made          int     `json:"made"`
+	Replies       int     `json:"replies"`
+	TodosTaken    int     `json:"todos_taken"`
+	Total         int     `json:"total"`
+	CostPerOutput float64 `json:"cost_per_output,omitempty"` // cost_usd / total; absent when nothing was produced
 }
 
 type retroCause struct {
@@ -118,6 +130,13 @@ func (s *Server) retro(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	replies, err := s.aftermathLog().list()
+	if err != nil {
+		return nil, err
+	}
+	for i := range view.Tasks {
+		view.Tasks[i].Output = finishOutput(view.Tasks[i], replies, items, from)
+	}
 	view.Todos, view.Kinds, view.Slow = retroTodosFor(items, from, to)
 	if s.Checks != nil {
 		for name, res := range s.Checks() {
@@ -157,7 +176,7 @@ func (s *Server) ledgerCounts(from time.Time) (map[string]int, error) {
 
 func retroTaskFor(id, name string, enabled bool, runs []store.RunRecord, from time.Time, proposals int) retroTask {
 	rt := retroTask{ID: id, Name: name, Enabled: enabled, ByStatus: map[string]int{}, Proposals: proposals}
-	fails, needs := map[string]int{}, map[string]int{}
+	fails, needs, made := map[string]int{}, map[string]int{}, map[string]bool{}
 	var total float64
 	timed := 0
 	for _, r := range runs {
@@ -180,6 +199,9 @@ func retroTaskFor(id, name string, enabled bool, runs []store.RunRecord, from ti
 			timed++
 			rt.MaxMin = max(rt.MaxMin, m)
 		}
+		for _, m := range r.Made {
+			made[m] = true
+		}
 		switch r.Status {
 		case store.StatusFail, store.StatusTimeout:
 			fails[cause(firstNonEmpty(r.Error, r.Summary, r.Status))]++
@@ -193,7 +215,28 @@ func retroTaskFor(id, name string, enabled bool, runs []store.RunRecord, from ti
 	rt.MaxMin = round1(rt.MaxMin)
 	rt.CostUSD = round2(rt.CostUSD)
 	rt.Failures, rt.NeedsYou = topCauses(fails), topCauses(needs)
+	rt.Output.Made = len(made)
 	return rt
+}
+
+// finishOutput adds the replies a task sent and the to-dos whose draft was taken, then the cost of each.
+func finishOutput(rt retroTask, replies []Aftermath, items []inbox.Item, from time.Time) retroOutput {
+	o := rt.Output
+	for _, a := range replies {
+		if a.Task == rt.ID && !a.At.Before(from) {
+			o.Replies++
+		}
+	}
+	for _, it := range items {
+		if it.TaskID == rt.ID && !it.Created.Before(from) && (it.Decision == inbox.DecisionAsIs || it.Decision == inbox.DecisionEdited) {
+			o.TodosTaken++
+		}
+	}
+	o.Total = o.Made + o.Replies + o.TodosTaken
+	if o.Total > 0 {
+		o.CostPerOutput = round2(rt.CostUSD / float64(o.Total))
+	}
+	return o
 }
 
 func retroTodosFor(items []inbox.Item, from, to time.Time) (retroTodos, []retroKind, []retroTodoAt) {
@@ -277,3 +320,23 @@ func topCauses(m map[string]int) []retroCause {
 func round1(f float64) float64 { return math.Round(f*10) / 10 }
 
 func round2(f float64) float64 { return math.Round(f*100) / 100 }
+
+// weekOf is one task's last retroDefaultDays: what it cost and what it produced for that.
+func (s *Server) weekOf(t task.Task) (retroTask, error) {
+	from := s.Now().Add(-retroDefaultDays * 24 * time.Hour)
+	runs, err := s.Store.Runs(t.ID, 0)
+	if err != nil {
+		return retroTask{}, err
+	}
+	items, err := s.Inbox.List(true)
+	if err != nil {
+		return retroTask{}, err
+	}
+	replies, err := s.aftermathLog().list()
+	if err != nil {
+		return retroTask{}, err
+	}
+	rt := retroTaskFor(t.ID, t.Name, t.Enabled, runs, from, 0)
+	rt.Output = finishOutput(rt, replies, items, from)
+	return rt, nil
+}

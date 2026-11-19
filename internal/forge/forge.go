@@ -42,9 +42,10 @@ type Herdr interface {
 type Forge struct {
 	H               Herdr
 	VigilBin        string
-	Root            string // Vigil root, used as the forge working directory
-	HerdrBin        string // herdr executable, for attaching to resident agents
-	ResidentSession string // herdr session that hosts resident agents
+	Root            string              // Vigil root, used as the forge working directory
+	HerdrBin        string              // herdr executable, for attaching to resident agents
+	ResidentSession string              // herdr session that hosts resident agents
+	Sleep           func(time.Duration) // waits between prompt checks; nil is time.Sleep
 }
 
 // Session is a live forge or takeover agent.
@@ -63,8 +64,9 @@ func (f Forge) Held(ctx context.Context, id string) bool {
 	return err == nil
 }
 
-// Start opens a forge session for idea and returns its agent name.
-func (f Forge) Start(ctx context.Context, idea string) (string, error) {
+// Start opens a forge session for idea in the owner's herdr and returns its agent name. The owner talks
+// to the forger there (pictures, menus and all), so its workspace is focused and shown before Claude boots.
+func (f Forge) Start(ctx context.Context, idea string, shown func()) (string, error) {
 	idea = strings.TrimSpace(idea)
 	if idea == "" {
 		return "", errors.New("idea is empty")
@@ -74,10 +76,14 @@ func (f Forge) Start(ctx context.Context, idea string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("create forge workspace: %w", err)
 	}
+	if err := f.H.FocusWorkspace(ctx, workspaceOf(pane)); err != nil {
+		return "", fmt.Errorf("focus forge workspace: %w", err)
+	}
+	shown()
 	if err := f.start(ctx, name, pane, nil); err != nil {
 		return "", err
 	}
-	if err := resident.Submit(ctx, f.H, name, Prompt(idea, f.VigilBin, f.Root, name), time.Sleep); err != nil {
+	if err := resident.Submit(ctx, f.H, name, Prompt(idea, f.VigilBin, f.Root, name), f.sleep()); err != nil {
 		return "", fmt.Errorf("send forge prompt: %w", err)
 	}
 	return name, nil
@@ -213,7 +219,51 @@ func (f Forge) Say(ctx context.Context, name, text string) error {
 	if !managed(name) {
 		return fmt.Errorf("%s is not a Vigil session", name)
 	}
-	return f.H.Prompt(ctx, name, text)
+	err := f.H.Prompt(ctx, name, text)
+	if !herdr.IsCode(err, herdr.CodeAgentBlocked) {
+		return err
+	}
+	return f.choose(ctx, name, text)
+}
+
+// choose answers the dialog a session is stopped on (a question with numbered options, a permission
+// prompt): text names an option by its number or its words.
+func (f Forge) choose(ctx context.Context, name, text string) error {
+	screen, err := f.H.Read(ctx, name, screenLines)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", name, err)
+	}
+	p := resident.ReadPrompt(screen)
+	if len(p.Options) == 0 {
+		return errors.New("agent 停在一个对话框上，去 herdr 里处理一下")
+	}
+	key, ok := p.Choose(text)
+	if !ok {
+		return fmt.Errorf("agent 正停在选择框上，回复选项编号或原文：\n%s", p.Choices())
+	}
+	if err := f.H.SendKeys(ctx, name, key); err != nil {
+		return fmt.Errorf("press %s: %w", key, err)
+	}
+	return nil
+}
+
+func (f Forge) sleep() func(time.Duration) {
+	if f.Sleep == nil {
+		return time.Sleep
+	}
+	return f.Sleep
+}
+
+// Show focuses a live forge or takeover session's workspace in the owner's herdr.
+func (f Forge) Show(ctx context.Context, name string) error {
+	if !managed(name) {
+		return fmt.Errorf("%s is not a Vigil session", name)
+	}
+	a, err := f.H.AgentGet(ctx, name)
+	if err != nil {
+		return fmt.Errorf("锻造会话 %s 已经结束了：%w", name, err)
+	}
+	return f.H.FocusWorkspace(ctx, a.WorkspaceID)
 }
 
 // Screen returns the recent terminal of a forge or takeover session.

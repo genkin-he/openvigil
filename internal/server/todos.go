@@ -103,7 +103,7 @@ func (s *Server) AnswerChoice(id, label, remark string) (inbox.Item, error) {
 	if remark = strings.TrimSpace(remark); remark != "" {
 		text += "。补充：" + remark
 	}
-	return s.AnswerTodoReason(id, TodoInstruct, text, "")
+	return s.answerTodo(id, TodoInstruct, text, "", true)
 }
 
 // askKind marks a question the self-evolution task puts to the owner about why they handled something
@@ -155,11 +155,19 @@ func dismissReason(reason string) (string, error) {
 
 // AnswerTodoReason is AnswerTodo with the reason for a dismissal, which decides what Vigil learns from it.
 func (s *Server) AnswerTodoReason(id, mode, text, reason string) (inbox.Item, error) {
+	return s.answerTodo(id, mode, text, reason, false)
+}
+
+// answerTodo settles an item; picked marks an answer made by pressing one of the item's own buttons,
+// which only chooses among options the agent laid out and so is no feedback on its suggested reply.
+func (s *Server) answerTodo(id, mode, text, reason string, picked bool) (inbox.Item, error) {
 	it, err := s.Inbox.Get(id)
 	if err != nil {
 		return inbox.Item{}, todoErr(err)
 	}
 	switch {
+	case isDialogTodo(it):
+		return s.settleDialogTodo(it, mode, text)
 	case isRule(it):
 		return s.settleRule(it, mode, text)
 	case isRevoke(it):
@@ -180,7 +188,7 @@ func (s *Server) AnswerTodoReason(id, mode, text, reason string) (inbox.Item, er
 			return inbox.Item{}, todoErr(err)
 		}
 		if it.TaskID == inbox.SystemTask {
-			s.muted.Store(it.Ref, s.Now())
+			s.setMute(it.Ref, s.Now())
 		}
 		s.learn(closed, decision)
 		s.todoChanged(closed, "todo.closed")
@@ -202,7 +210,7 @@ func (s *Server) AnswerTodoReason(id, mode, text, reason string) (inbox.Item, er
 	}
 	s.Engine.Submit(runner.Request{TaskID: it.TaskID, Trigger: runner.ByAnswer, Input: todoInput(answered, mode, s.vigilBin())})
 	s.todoChanged(answered, "todo.answered")
-	s.learn(answered, decisionFor(it, mode, text))
+	s.learnFrom(answered, decisionFor(it, mode, text), !picked)
 	return answered, nil
 }
 

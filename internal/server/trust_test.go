@@ -27,7 +27,7 @@ func TestTrustRates(t *testing.T) {
 		{TaskID: "other", Kind: "问进度", Decision: inbox.DecisionNoise, Status: inbox.StatusDone, Updated: day(1)},
 	}
 	memory := "- 2026-11-01 我已授权：「问进度」类事情，有证据的明确答案直接以我的口吻回复\n- 2026-11-02 别的"
-	got := trustFor(items, memory, "slack", now)
+	got := trustFor(items, memory, nil, "slack", now)
 	if len(got) != 1 {
 		t.Fatalf("kinds = %+v", got)
 	}
@@ -50,5 +50,32 @@ func TestTrustEndpoint(t *testing.T) {
 	rec, _ := do(h, "GET", "/api/tasks/slack/trust", "", true)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"kind":"通知"`) || !strings.Contains(rec.Body.String(), `"noise":1`) {
 		t.Fatalf("trust: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A to-do the owner answered by hand in Slack still says whether the agent had it right: the draft
+// (or, when the agent was not to send one, the reply it would have sent) against what the owner wrote.
+func TestTrustCountsRepliesWrittenByHandInSlack(t *testing.T) {
+	now := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+	mk := func(id, reply, shadow string) inbox.Item {
+		return inbox.Item{ID: id, TaskID: "slack", Kind: "要排期", Decision: inbox.DecisionHandledElsewhere,
+			Reply: reply, Shadow: shadow, Status: inbox.StatusDone, Updated: now.Add(-time.Hour)}
+	}
+	items := []inbox.Item{
+		mk("td-1", "这周排不进，下周三可以开始", ""),
+		mk("td-2", "", "这周排不进，下周一开始"),
+		mk("td-3", "", "可以，今天就做"),
+		mk("td-4", "", "可以，今天就做"), // no hand reply found: says nothing about the draft
+	}
+	hand := map[string]string{
+		"td-1": "这周排不进，下周三可以开始",
+		"td-2": "这周排不进，下周一开始吧",
+		"td-3": "这个要先问下产品，先别排",
+	}
+
+	k := trustFor(items, "", hand, "slack", now)[0]
+
+	if k.Samples != 4 || k.Drafted != 3 || math.Abs(k.Adoption-2.0/3) > 1e-9 {
+		t.Fatalf("trust = %+v", k)
 	}
 }

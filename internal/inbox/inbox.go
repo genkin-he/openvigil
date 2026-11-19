@@ -47,6 +47,7 @@ type Item struct {
 	Detail   string    `json:"detail,omitempty"`   // channel / background
 	Analysis string    `json:"analysis,omitempty"` // what was checked, the conclusion, what the owner must decide
 	Reply    string    `json:"reply,omitempty"`    // a drafted reply the owner can send as is
+	Shadow   string    `json:"shadow,omitempty"`   // with no Reply: what the agent would have sent; never offered for sending, only compared with what the owner wrote
 	Link     string    `json:"link,omitempty"`     // where the matter lives (Slack deep link, issue, MR …)
 	Ref      string    `json:"ref,omitempty"`      // stable key of the source, e.g. <channel>:<ts>[:<thread_ts>]; dedupes items
 	Target   string    `json:"target,omitempty"`   // where a reply goes, e.g. slack:<channel>:<thread_ts> or an issue URL
@@ -189,6 +190,7 @@ func mergeInto(old, in Item, now time.Time) Item {
 	out.Detail = pick(old.Detail, in.Detail)
 	out.Analysis = pick(old.Analysis, in.Analysis)
 	out.Reply = pick(old.Reply, in.Reply)
+	out.Shadow = pick(old.Shadow, in.Shadow)
 	out.Link = pick(old.Link, in.Link)
 	out.Target = pick(old.Target, in.Target)
 	out.Kind = pick(old.Kind, in.Kind)

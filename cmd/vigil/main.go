@@ -46,6 +46,9 @@ func init() {
 		"amend":     {"vigil amend <id> -f runbook.md --reason \"...\"   提议改进 runbook", cmdAmend},
 		"spawn":     {"vigil spawn <id> --title \"…\" --input -|文字       把耗时的活交给后台子任务（不阻塞主任务）", cmdSpawn},
 		"todo":      {"vigil todo add|list|done|note …              待办：agent 提交要我拍板的事，我在控制台回答", cmdTodo},
+		"export":    {"vigil export [-o 包.tar.gz]             搬家：跑完进行中的活、停掉服务，把数据打成一个包（登录和 token 不打包）", cmdExport},
+		"import":    {"vigil import <包> [--force] [--no-install]   搬家：在新电脑解包、改路径、体检，全部就绪才安装启动", cmdImport},
+		"doctor":    {"vigil doctor                          体检：工具、登录、任务用到的仓库和目录是否都在", cmdDoctor},
 		"patch":     {"vigil patch propose --task <id> --title \"…\" --why \"…\" -f change.diff   提议改 Vigil 自己的代码（git diff），主人在控制台确认后自动测试、合并、安装", cmdPatch},
 	}
 }

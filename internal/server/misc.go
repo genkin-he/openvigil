@@ -159,14 +159,24 @@ func (s *Server) forgeStart(_ http.ResponseWriter, r *http.Request) (any, error)
 	if err := decode(r, &b); err != nil {
 		return nil, err
 	}
-	name, err := s.Forge.Start(r.Context(), b.Idea)
+	hint := forgeHint
+	name, err := s.Forge.Start(r.Context(), b.Idea, func() { hint = s.raise(r, hint) })
 	if err != nil {
 		return nil, badRequest("%v", err)
 	}
 	if err := s.saveForge(forgeRecord{Name: name, Idea: strings.TrimSpace(b.Idea), StartedAt: s.Now()}); err != nil {
 		s.logf("forge record %s: %v", name, err)
 	}
-	return map[string]string{"name": name}, nil
+	return map[string]string{"name": name, "hint": hint}, nil
+}
+
+const forgeHint = "已在 herdr 打开「Vigil 锻造」，直接在那里和锻造师对话（可以贴图、选选项）；这里会跟着显示进度"
+
+func (s *Server) forgeShow(_ http.ResponseWriter, r *http.Request) (any, error) {
+	if err := s.Forge.Show(r.Context(), r.PathValue("name")); err != nil {
+		return nil, badRequest("%v", err)
+	}
+	return map[string]string{"hint": s.raise(r, forgeHint)}, nil
 }
 
 func (s *Server) forgeSay(_ http.ResponseWriter, r *http.Request) (any, error) {

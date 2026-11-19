@@ -8,6 +8,7 @@ import { todoCards, followList } from "./todos.js";
 import { notifyDesktop, askNotifyPermission } from "./notify.js";
 import { maybeWelcome, maybeTabsTour, replayTour } from "./tour.js";
 import { initSettings, getPrefs, setPrefs } from "./settings.js";
+import { exportStarted } from "./migrate.js";
 import { keepFocus, hasDraftIn } from "./drafts.js";
 
 const PULSE_BARS = 24;
@@ -27,7 +28,8 @@ async function load() {
     state.problems = data.problems || [];
     render();
   } catch (err) {
-    $("headline").textContent = t("conn.fail", { msg: err.message });
+    // After a move was started the daemon stops on purpose: say so instead of showing an error.
+    $("headline").textContent = exportStarted() ? t("mig.offlineHead") : t("conn.fail", { msg: err.message });
   }
 }
 
@@ -56,6 +58,7 @@ function renderHeadline() {
   const failing = vs.filter((v) => v.state.fail_streak > 0).length;
   const next = vs.filter((v) => v.next_run).map((v) => ({ v, t: new Date(v.next_run) })).sort((a, b) => a.t - b.t)[0];
   const parts = [];
+  if (exportStarted()) parts.push(h("span", { class: "warn", text: t("mig.offlineHead") }));
   if (state.draining) parts.push(h("span", { class: "warn", text: t("head.draining") }));
   if (live) parts.push(h("b", { text: t("head.live", { n: live }) }));
   if (jobs) parts.push(h("span", { class: "live", text: t("head.jobs", { n: jobs }) }));
@@ -249,7 +252,8 @@ function taskRow(v, i, compact = false) {
     h("div", { class: "task-main" },
       h("div", { class: "task-name" }, h("span", { text: v.task.name }),
         h("i", { class: `chip${v.task.mode === "resident" ? " resident" : ""}`, text: t(v.task.mode === "resident" ? "mode.resident" : "mode.headless") }),
-        v.jobs?.length ? h("i", { class: "chip job", title: v.jobs.map((j) => j.title).join("\n"), text: t("task.jobs", { n: v.jobs.length }) }) : null),
+        v.jobs?.length ? h("i", { class: "chip job", title: v.jobs.map((j) => j.title).join("\n"), text: t("task.jobs", { n: v.jobs.length }) }) : null,
+        v.proposals ? h("i", { class: "chip proposal", title: t("task.proposals.title"), text: t("task.proposals", { n: v.proposals }) }) : null),
       h("p", { class: "task-last" },
         last ? h("time", { text: hm(new Date(last.started_at)) }) : null,
         last ? plainText(last.summary) : t("task.never"))),
@@ -316,7 +320,10 @@ const refresh = debounce(() => {
 
 function init() {
   applyStatic();
-  initSettings($("settings"), { onChange: renderTasks, onTour: () => replayTour(state.views) });
+  initSettings($("settings"), {
+    onChange: renderTasks, onTour: () => replayTour(state.views),
+    onExported: renderHeadline,
+  });
   document.addEventListener("click", askNotifyPermission, { once: true });
   $("forge-open").addEventListener("click", () => openForge({ onCreated: load }));
   window.addEventListener("hashchange", route);

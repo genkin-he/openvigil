@@ -148,3 +148,45 @@ func TestDrainTogglingNeverRunsALaneTwice(t *testing.T) {
 		t.Fatal("two runs of one task overlapped")
 	}
 }
+
+func TestHoldingJobsLetsForegroundRoundsRun(t *testing.T) {
+	s, err := store.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(task.WithDefaults(manual("slack"))); err != nil {
+		t.Fatal(err)
+	}
+	g := &jobGate{release: make(chan struct{}), started: make(chan string, 1)}
+	close(g.release)
+	e := New(context.Background(), Config{Store: s, Headless: g, AfterFunc: func(time.Duration, func()) {}})
+
+	e.HoldJobs(true, time.Hour)
+	e.Submit(Request{TaskID: "slack", Trigger: ByJob, Job: "j-1", JobTitle: "发布", Input: "发布"})
+	e.Submit(Request{TaskID: "slack", Trigger: ByStream, Input: "私聊"})
+	waitIdle(t, e, "slack")
+	time.Sleep(50 * time.Millisecond)
+	runs, _ := s.Runs("slack", 0)
+	if len(runs) != 1 || runs[0].Job != "" {
+		t.Fatalf("runs while holding jobs = %+v", runs)
+	}
+	if p := e.Pending(); len(p) != 1 || p[0].Job != "j-1" {
+		t.Fatalf("pending = %+v", p)
+	}
+	if !e.HoldingJobs() || e.Draining() {
+		t.Fatal("holding jobs is not a full drain")
+	}
+
+	e.Drain(false, 0) // a cancelled install lets everything go
+	deadline := time.Now().Add(5 * time.Second)
+	for len(e.Pending()) > 0 || len(e.Running()) > 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("held job never ran")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	e.Wait()
+	if e.HoldingJobs() {
+		t.Fatal("drain off kept holding jobs")
+	}
+}

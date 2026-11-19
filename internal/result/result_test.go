@@ -1,6 +1,7 @@
 package result
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -48,5 +49,15 @@ func TestFallbackStripsJSONAndTruncates(t *testing.T) {
 	}
 	if Fallback(Fail, "").Summary == "" {
 		t.Fatal("empty fallback summary")
+	}
+}
+
+func TestValidateKeepsWhatTheRunMadeTrimmedAndUnique(t *testing.T) {
+	got, err := Validate(Result{Status: "ok", Summary: "s", Made: []string{" MR https://g/x/-/merge_requests/1 ", "", "MR https://g/x/-/merge_requests/1", "评论 https://slack/p1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"MR https://g/x/-/merge_requests/1", "评论 https://slack/p1"}; !slices.Equal(got.Made, want) {
+		t.Fatalf("made = %q", got.Made)
 	}
 }

@@ -37,6 +37,7 @@ func Build(c Context) string {
 	fmt.Fprintf(&b, "你是这个任务的长期值守员，由 Vigil 守护进程按时唤醒。每轮都是独立的一次执行，延续性靠下面这些文件，不靠会话记忆。\n")
 	fmt.Fprintf(&b, "1. 先读：%s/brief.md（需求，最高优先级）、%s/runbook.md（做法，可能为空）、%s/memory.md（长期记忆，可能为空）。\n", c.Dir, c.Dir, c.Dir)
 	b.WriteString("   memory.md 里以「决策：」开头的是我之前对同类问题的决定，遇到同类问题直接照办，不要再问我。\n")
+	fmt.Fprintf(&b, "   几天前的事务流水已挪到 %s/memory.archive.md（可能没有），遇到相关的人、线程、服务时先 grep 它。\n", c.Dir)
 	if c.OwnerDoc != "" {
 		fmt.Fprintf(&b, "   还要读 %s：我的判断原则，所有任务共用，从我自己的纠错、回复和决定里提炼出来；代我判断、措辞时照它办。和本任务 brief 冲突时以 brief 为准。\n", c.OwnerDoc)
 	}
@@ -69,7 +70,7 @@ func Build(c Context) string {
 const reportQuoteGuide = "汇报命令本身也要过权限规则：summary、memory 里提到命令时用文字描述（比如「生产环境的 list 命令」），不要原样抄命令行参数，否则可能命中确认规则，让汇报卡在确认框上。\n"
 
 func reportSpec(c Context) string {
-	schema := `{"status": "ok | needs_you | fail", "summary": "一两句话：做了什么、结果如何（中文）", "question": "needs_you 时：要我决定什么，一句话", "options": ["A: 推荐做法 — 后果", "B: …"], "recommendation": "A", "memory": ["值得长期记住、下一轮要用的事实（可选）"]}`
+	schema := `{"status": "ok | needs_you | fail", "summary": "一两句话：做了什么、结果如何（中文）", "question": "needs_you 时：要我决定什么，一句话", "options": ["A: 推荐做法 — 后果", "B: …"], "recommendation": "A", "made": ["这一轮新产出的东西，一项一条带链接：提的 MR、发的评论、建的工单…（可选；代回 Slack 不用列，Vigil 自己会数）"], "memory": ["下次遇到同类事还用得上的规则或事实（可选）；某条线程的进展、已回复谁、在等谁这类流水不要写，跟进用 vigil follow、要我办的用 vigil todo"]}`
 	links := "\nsummary、question、options 里提到的工单、MR、需求/缺陷、发布单、Slack 消息、文档等，只要有网页地址，一律写成 [名称](完整 https 链接)，例如 [工单 #331](https://…/issues/331)、[!175](https://…/merge_requests/175)；不要只写编号或路径。拿不到地址的才只写编号。\n"
 	tail := links + todoGuide(c) + followGuide(c) + spawnGuide(c) + "\n如果发现 runbook 可以写得更好（更快、更稳），在汇报前执行：" + bin(c) + " amend " + c.Task.ID + " -f <新 runbook 文件> --reason \"原因\"\n"
 	if c.Task.Mode == task.ModeResident {
@@ -100,7 +101,7 @@ func followGuide(c Context) string {
 // todoGuide tells the agent how to hand the owner a decision about one concrete matter.
 func todoGuide(c Context) string {
 	return "\n要我拍板或确认回复的具体事项（某条 Slack 消息、某个缺陷 / MR / 工单），写进 Vigil 待办，我会在 Vigil 控制台回答，回答会作为新一轮输入交回本任务：\n" +
-		bin(c) + " todo add --task " + c.Task.ID + " --title \"<人>：<一句话>\" --kind \"<事情的类别>\" --detail \"<频道 / 背景>\" --link \"<网页或 slack:// 深链>\" --ref \"<来源唯一键，如 <channel>:<ts>[:<thread_ts>]>\" --target \"<回复发到哪，如 slack:<channel>:<thread_ts> 或 issue:<链接>>\" --analysis \"<查了什么、结论和依据、要我定什么；多行用 - 从 stdin 读>\" --reply \"<可以直接发出去的建议回复；拿不准或要我拍板的不带>\"\n" +
+		bin(c) + " todo add --task " + c.Task.ID + " --title \"<人>：<一句话>\" --kind \"<事情的类别>\" --detail \"<频道 / 背景>\" --link \"<网页或 slack:// 深链>\" --ref \"<来源唯一键，如 <channel>:<ts>[:<thread_ts>]>\" --target \"<回复发到哪，如 slack:<channel>:<thread_ts> 或 issue:<链接>>\" --analysis \"<查了什么、结论和依据、要我定什么；多行用 - 从 stdin 读>\" --reply \"<可以直接发出去的建议回复；拿不准或要我拍板的不带>\" --shadow \"<不带 --reply 时写：要是让你直接回，你会怎么回。不会发出去，只用来和我实际的回复对比，看哪类事可以放手给你>\"\n" +
 		"--kind 是稳定的短类别（2～6 个字，同类事每次用同一个词，例如「问进度」「问数据」「要审批」「缺陷确认」「要排期」），Vigil 按类别学习我的处理习惯，所以别每次换说法；先用 " + bin(c) + " todo kinds " + c.Task.ID + " 看已有的类别，能归进去就用已有的。\n" +
 		"要我在几个明确做法里选一个的（审批：批这一次 / 不批 / 以后都自动批；要不要做某事；几种方案），加 --choice，每个选项一个：--choice \"<按钮>|<后果>\"，按钮不超过 30 字、2～5 个，后果写清选它会发生什么。我点了哪个，你会收到「我选了「<按钮>」（<后果>）」；我也可能不点按钮、直接写意见。开放问题（要我给数据、写措辞）不要硬凑选项。\n" +
 		"同一 --ref 会更新已有待办，不会重复建；写之前可以用 " + bin(c) + " todo list 看已有的。写过待办的事，本轮结果标 ok，summary 写「已建待办 td-xxx」，不要再标 needs_you；needs_you 只留给不能落到具体事项、又要我决定的事（例如任务规则要不要改）。\n"

@@ -57,6 +57,9 @@ func (s *Server) answerDialog(id string, asked store.RunRecord, answer string) (
 	for _, input := range lost {
 		s.Engine.Submit(runner.Request{TaskID: id, Trigger: runner.ByRetry, Input: dialogRerunNote + input})
 	}
+	if it, open, err := s.Inbox.OpenByRef(dialogTodoRef(id)); err == nil && open {
+		s.closeDialogTodo(it, "已在会话里按下「"+answer+"」")
+	}
 	s.logf("dialog %s: pressed %q, re-running %d rounds", id, answer, len(lost))
 	s.changed(id, "answered")
 	return map[string]any{"id": id, "pressed": answer, "rerun": len(lost)}, nil

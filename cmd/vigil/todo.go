@@ -11,7 +11,7 @@ import (
 	"vigil/internal/inbox"
 )
 
-const todoUsage = `vigil todo add --task <任务id> --title "<人>：<一句话>" [--kind <类别>] [--detail ..] [--analysis ..|-] [--reply ..] [--link ..] [--ref ..] [--target ..] [--owner] [--choice "<按钮>|<后果>" ...]
+const todoUsage = `vigil todo add --task <任务id> --title "<人>：<一句话>" [--kind <类别>] [--detail ..] [--analysis ..|-] [--reply ..|--shadow ..] [--link ..] [--ref ..] [--target ..] [--owner] [--choice "<按钮>|<后果>" ...]
 vigil todo list [--all]
 vigil todo kinds <任务id>          已用过的类别和你的处理方式
 vigil todo done <id> --outcome "<实际发出的原文或做了什么>"
@@ -46,6 +46,7 @@ func todoAdd(args []string) error {
 	fs.StringVar(&it.Detail, "detail", "", "")
 	analysis := fs.String("analysis", "", "")
 	fs.StringVar(&it.Reply, "reply", "", "")
+	fs.StringVar(&it.Shadow, "shadow", "", "")
 	fs.StringVar(&it.Link, "link", "", "")
 	fs.StringVar(&it.Ref, "ref", "", "")
 	fs.StringVar(&it.Target, "target", "", "")

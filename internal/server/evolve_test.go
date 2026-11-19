@@ -210,3 +210,31 @@ func TestLedgerRecordsAndJudgesChanges(t *testing.T) {
 		t.Fatalf("unknown id: %d", rec.Code)
 	}
 }
+
+func TestPickedChoiceDoesNotWakeEvolutionButTypedInstructionDoes(t *testing.T) {
+	s, _ := mirrorServer(t)
+	s.Mirror = nil
+	f := &fakeEvolve{}
+	s.Evolve = f.evolver("evo")
+	choices := []inbox.Choice{{Label: "代我点完并回线程", Note: "点完再回"}, {Label: "我自己点", Note: "不回"}}
+	picked, _, _ := s.Inbox.Add(inbox.Item{TaskID: "slack", Kind: "推流程", Title: "小林：请点发布节点", Reply: "点好了", Ref: "C1:1", Choices: choices})
+	if _, err := s.AnswerChoice(picked.ID, "代我点完并回线程", ""); err != nil {
+		t.Fatal(err)
+	}
+	s.Engine.Wait()
+	if len(f.timers) != 0 {
+		t.Fatal("pressing one of the item's own buttons woke the evolution task")
+	}
+	if got, _ := s.Inbox.Get(picked.ID); got.Decision != inbox.DecisionInstructed {
+		t.Fatalf("decision = %q, want it still recorded", got.Decision)
+	}
+
+	typed, _, _ := s.Inbox.Add(inbox.Item{TaskID: "slack", Kind: "推流程", Title: "小林：再点一个", Reply: "点好了", Ref: "C1:2", Choices: choices})
+	if _, err := s.AnswerTodo(typed.ID, TodoInstruct, "先别点，等测试过了"); err != nil {
+		t.Fatal(err)
+	}
+	s.Engine.Wait()
+	if len(f.timers) != 1 {
+		t.Fatal("a typed instruction instead of the suggested reply did not wake the evolution task")
+	}
+}

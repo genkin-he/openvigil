@@ -47,6 +47,7 @@ type OwnerReply struct {
 	Title    string    `json:"title"`
 	Decision string    `json:"decision,omitempty"` // how the to-do was settled when the reply was seen ("" while open)
 	Draft    string    `json:"draft,omitempty"`    // the agent's suggested reply
+	Shadow   bool      `json:"shadow,omitempty"`   // Draft is what the agent would have sent, not a reply it offered
 	Text     string    `json:"text"`               // what the owner wrote
 	Channel  string    `json:"channel"`
 	TS       string    `json:"ts"`
@@ -65,7 +66,7 @@ func (s *Server) ownerReplies() *ownerReplyLog {
 	return s.ownerLog
 }
 
-// HarvestLoop collects owner replies on its own clock, so slow Slack reads never hold up follow-ups.
+// HarvestLoop collects owner replies and what askers said after agent replies on its own clock, so slow Slack reads never hold up follow-ups.
 func (s *Server) HarvestLoop(ctx context.Context) {
 	tick := time.NewTicker(ownerHarvestEvery)
 	defer tick.Stop()
@@ -75,6 +76,7 @@ func (s *Server) HarvestLoop(ctx context.Context) {
 			return
 		case <-tick.C:
 			s.harvestOwnerReplies(ctx)
+			s.watchAftermath(ctx)
 		}
 	}
 }
@@ -238,17 +240,31 @@ func byHand(text string) bool {
 
 func (s *Server) keepOwnerReply(it inbox.Item, channel string, m slackctl.Message) {
 	r := OwnerReply{Todo: it.ID, Task: it.TaskID, Kind: it.Kind, Title: it.Title, Decision: it.Decision,
-		Draft: clipRunes(it.Reply, ownerTextLen), Text: clipRunes(strings.TrimSpace(m.Text), ownerTextLen),
+		Draft: clipRunes(draftOf(it), ownerTextLen), Shadow: strings.TrimSpace(it.Reply) == "" && it.Shadow != "", Text: clipRunes(strings.TrimSpace(m.Text), ownerTextLen),
 		Channel: channel, TS: m.TS, At: time.Unix(0, int64(slackTime(m.TS)*1e9)), Seen: s.Now()}
 	_, seen, err := s.ownerReplies().addUnless(r, func(OwnerReply) bool { return false })
 	if err != nil {
 		s.logf("owner reply %s: %v", it.ID, err)
 		return
 	}
-	if seen || r.Draft == "" || replay.Similarity(r.Draft, r.Text) >= ownerWakeBelow {
+	if seen {
 		return
 	}
-	s.wakeEvolve("你在「" + it.Title + "」里亲手回了，和草稿不一样（待办 " + it.ID + "）")
+	s.closeAnsweredByHand(it, r.Text)
+	if r.Draft == "" {
+		return
+	}
+	if it.Decision != "" && it.Kind != "" {
+		s.proposeFor(it.TaskID, it.Kind) // a new hand reply is new evidence about the kind
+	}
+	if replay.Similarity(r.Draft, r.Text) >= ownerWakeBelow {
+		return
+	}
+	what := "草稿"
+	if r.Shadow {
+		what = "agent 私下拟的回复"
+	}
+	s.wakeEvolve("你在「" + it.Title + "」里亲手回了，和" + what + "不一样（待办 " + it.ID + "）")
 }
 
 // ownerRepliesSince lists the samples found at or after from, oldest first, at most the newest max.
@@ -267,4 +283,39 @@ func ownerRepliesSince(l *ownerReplyLog, from time.Time, max int) ([]OwnerReply,
 		out = out[len(out)-max:]
 	}
 	return out, nil
+}
+
+// holdingWords are what the owner says to buy time; a short reply made of them settles nothing.
+var holdingWords = []string{"稍等", "等下", "等等", "我看看", "我看下", "看看", "看下", "晚点", "马上", "收到", "好的我", "在看", "我查", "查下", "查一下"}
+
+const holdingMaxRunes = 12
+
+func holdingReply(text string) bool {
+	t := strings.TrimSpace(slackMention.ReplaceAllString(text, ""))
+	if len([]rune(t)) > holdingMaxRunes {
+		return false
+	}
+	for _, w := range holdingWords {
+		if strings.Contains(t, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// handReplyNoteLen bounds the owner's words quoted in the outcome of a to-do closed for him.
+const handReplyNoteLen = 80
+
+// closeAnsweredByHand settles a to-do the owner answered in Slack himself, as "handled elsewhere", so he
+// does not have to come back and close it. A to-do only he can do (approve on a page, say) stays open: a
+// word in the thread does not mean the work is done. So do rule, revoke and patch cards, settled only
+// by an explicit yes or no.
+func (s *Server) closeAnsweredByHand(it inbox.Item, text string) {
+	if it.Status != inbox.StatusOpen || it.Owner || isRule(it) || isRevoke(it) || isPatch(it) || holdingReply(text) {
+		return
+	}
+	note := "你在 Slack 里亲手回了，自动结案：" + clipRunes(strings.TrimSpace(text), handReplyNoteLen)
+	if _, err := s.AnswerTodoReason(it.ID, TodoDismiss, note, inbox.DecisionHandledElsewhere); err != nil {
+		s.logf("close %s answered by hand: %v", it.ID, err)
+	}
 }

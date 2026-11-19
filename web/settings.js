@@ -1,7 +1,9 @@
-// Per-viewer console settings: task list layout, language, guided tour.
+// Per-viewer console settings: task list layout, language, guided tour; plus the machine's health check
+// and moving Vigil to another computer.
 // The panel floats beside the page instead of covering it, so a layout change shows behind it at once.
 import { h } from "./util.js";
 import { t, lang, setLang } from "./i18n.js";
+import { migrateSection } from "./migrate.js";
 
 const STORE_KEY = "vigil.prefs";
 const REOPEN_KEY = "vigil.settings.reopen"; // switching language reloads; reopen the panel afterwards
@@ -38,6 +40,7 @@ export function setPrefs(patch) {
 }
 
 let panel = null;
+let wired = null; // the settings button and hooks, so other views can open the panel (openMigrate)
 
 /**
  * Wire the settings button.
@@ -45,6 +48,7 @@ let panel = null;
  * @param {{onChange: Function, onTour: Function}} hooks onChange re-renders after a layout change
  */
 export function initSettings(button, hooks) {
+  wired = { button, hooks };
   button.addEventListener("click", () => (panel ? close() : open(button, hooks)));
   let reopen = false;
   try {
@@ -65,17 +69,31 @@ function close() {
   panel = null;
 }
 
-function open(button, hooks) {
+/** Open the panel at "Move & health check" and run the health check (from a failed-check to-do). */
+export function openMigrate() {
+  if (!wired) return;
+  close();
+  open(wired.button, wired.hooks, { autoDoctor: true });
+  panel?.el.querySelector("#settings-migrate")?.scrollIntoView({ block: "start" });
+}
+
+function open(button, hooks, { autoDoctor = false } = {}) {
   const el = h("div", { class: "settings", role: "dialog", "aria-label": t("settings.title") },
     h("h2", { text: t("settings.title") }),
     section(t("settings.layout"), layoutChoices(hooks)),
     section(t("settings.lang"), langChoices()),
     section(t("settings.tour"), h("div", { class: "settings-row" },
       h("p", { class: "settings-hint", text: t("settings.tourHint") }),
-      h("button", { class: "btn", type: "button", text: t("settings.tourReplay"), onclick: () => { close(); hooks.onTour(); } }))));
+      h("button", { class: "btn", type: "button", text: t("settings.tourReplay"), onclick: () => { close(); hooks.onTour(); } }))),
+    migrateSection({ autoDoctor, onExported: hooks.onExported }));
   document.body.append(el);
-  const away = (e) => { if (!el.contains(e.target) && !button.contains(e.target)) close(); };
-  const esc = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); button.focus(); } };
+  // A confirm dialog opened from the panel sits outside it: clicks and Esc there are the dialog's.
+  const inDialog = (target) => target instanceof Element && !!target.closest("dialog");
+  const away = (e) => { if (!el.contains(e.target) && !button.contains(e.target) && !inDialog(e.target)) close(); };
+  const esc = (e) => {
+    if (e.key !== "Escape" || document.querySelector("dialog[open]")) return;
+    e.stopPropagation(); close(); button.focus();
+  };
   document.addEventListener("pointerdown", away, true);
   document.addEventListener("keydown", esc, true);
   button.setAttribute("aria-expanded", "true");

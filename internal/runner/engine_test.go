@@ -40,10 +40,14 @@ func (f *fakeHeadless) Run(_ context.Context, req exec.Request) exec.Outcome {
 type fakeResident struct {
 	report bool
 	rotate []bool
+	out    *resident.Outcome // returned as is when set
 }
 
 func (f *fakeResident) Turn(_ context.Context, _ task.Task, _ string, rotate bool, reports <-chan result.Result) resident.Outcome {
 	f.rotate = append(f.rotate, rotate)
+	if f.out != nil {
+		return *f.out
+	}
 	if f.report {
 		r := <-reports
 		return resident.Outcome{Result: &r, SessionID: "rs"}
@@ -250,13 +254,13 @@ func TestSubmitMergesWhileBusy(t *testing.T) {
 func TestRecoverInterrupted(t *testing.T) {
 	h := newHarness(t, exec.Outcome{})
 	h.put(t, manual("a"))
-	_ = h.s.AppendRun(store.RunRecord{ID: "r1", TaskID: "a", Status: store.StatusRunning})
+	_ = h.s.AppendRun(store.RunRecord{ID: "r1", TaskID: "a", Status: store.StatusRunning, Input: interruptedNote + "回小林"})
 	redo, err := RecoverInterrupted(h.s, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	runs, _ := h.s.Runs("a", 0)
-	if runs[0].Status != store.StatusFail || len(redo) != 1 || redo[0].TaskID != "a" {
+	if runs[0].Status != store.StatusFail || len(redo) != 1 || redo[0].TaskID != "a" || redo[0].Input != interruptedNote+"回小林" {
 		t.Fatalf("runs = %+v redo = %+v", runs, redo)
 	}
 	if again, _ := RecoverInterrupted(h.s, time.Now()); len(again) != 0 {

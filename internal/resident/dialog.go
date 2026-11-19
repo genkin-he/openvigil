@@ -48,10 +48,12 @@ func ReadPrompt(screen string) Prompt {
 		return Prompt{Notes: []string{clipLine(tail(screen, promptFallbackLines))}}
 	}
 	p := Prompt{Question: strings.TrimSpace(lines[q])}
+	// Options may carry indented descriptions or be split by a rule ("4. Chat about this"): take every
+	// numbered line that continues the count.
 	for _, l := range lines[first:] {
 		m := optionLine.FindStringSubmatch(l)
-		if m == nil {
-			break
+		if m == nil || m[1] != fmt.Sprint(len(p.Options)+1) {
+			continue
 		}
 		p.Options = append(p.Options, m[2])
 		p.Keys = append(p.Keys, m[1])
@@ -122,6 +124,27 @@ func (p Prompt) Answers() []string {
 		}
 	}
 	return out
+}
+
+// Choose is the key that picks the option the owner named by its number or its text (a trailing
+// "(Recommended)" may be left off). Unlike Key it allows every option: it is for the owner's own sessions.
+func (p Prompt) Choose(text string) (string, bool) {
+	text = strings.TrimSpace(text)
+	for i, o := range p.Options {
+		if text == p.Keys[i] || text == o || text == strings.TrimSpace(strings.TrimSuffix(o, "(Recommended)")) {
+			return p.Keys[i], true
+		}
+	}
+	return "", false
+}
+
+// Choices lists the options as "1. …" lines.
+func (p Prompt) Choices() string {
+	out := make([]string, len(p.Options))
+	for i, o := range p.Options {
+		out[i] = p.Keys[i] + ". " + o
+	}
+	return strings.Join(out, "\n")
 }
 
 // Key is the key that picks answer in this prompt, if the prompt offers it and it settles only this prompt.

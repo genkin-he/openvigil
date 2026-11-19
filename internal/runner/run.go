@@ -31,6 +31,8 @@ const (
 // outcome is the executor-independent result of one run.
 type outcome struct {
 	dialog      bool
+	detour      bool // ran beside a resident agent stuck on a dialog
+	unsent      bool // a resident round that never reached the agent: it was already stuck on a dialog
 	denied      []string
 	refused     []string
 	status      string
@@ -96,12 +98,13 @@ func (e *Engine) execute(req Request) {
 
 	var out outcome
 	if light {
-		text := prompt.Build(e.promptContext(lt, st, dir, rec, input))
-		out = askAboutDenials(e.dispatchHeadless(lt, store.State{}, text, dir, filepath.Join(dir, "logs", rec.ID+".jsonl"), req.AllowTools))
-		out.sessionID, out.sessionRuns, out.sessionCost = st.SessionID, st.SessionRuns, st.SessionCost // the task's own session carries on untouched
+		out = e.runAside(lt, st, dir, rec, input, req.AllowTools)
 	} else {
 		text := prompt.Build(e.promptContext(t, st, dir, rec, input))
 		out = e.dispatch(t, st, text, rec.ID, dir, req.AllowTools)
+		if out.unsent {
+			out = e.detour(t, st, dir, rec, input, req.AllowTools)
+		}
 	}
 
 	e.setLive(t.ID, nil)
@@ -372,7 +375,7 @@ func (e *Engine) dispatchResident(t task.Task, st store.State, text, runID strin
 	case o.Result != nil:
 		out.status, out.res, out.structured = o.Result.Status, *o.Result, true
 	case o.Blocked != "":
-		out.status, out.res, out.dialog = store.StatusNeedsYou, blockedResult(o.Blocked), true
+		out.status, out.res, out.dialog, out.unsent = store.StatusNeedsYou, blockedResult(o.Blocked), true, o.Unsent
 	case o.TimedOut:
 		out.status, out.res = store.StatusTimeout, result.Fallback(result.Fail, "超时："+o.FinalText)
 	case o.Err != nil:
@@ -380,6 +383,31 @@ func (e *Engine) dispatchResident(t task.Task, st store.State, text, runID strin
 	default:
 		out.status, out.res = store.StatusOK, result.Fallback(result.OK, o.FinalText)
 	}
+	return out
+}
+
+// runAside runs a round in a fresh headless session beside the task's own one, which carries on untouched.
+func (e *Engine) runAside(t task.Task, st store.State, dir string, rec store.RunRecord, input string, allow []string) outcome {
+	text := prompt.Build(e.promptContext(t, st, dir, rec, input))
+	out := askAboutDenials(e.dispatchHeadless(t, store.State{}, text, dir, filepath.Join(dir, "logs", rec.ID+".jsonl"), allow))
+	out.sessionID, out.sessionRuns, out.sessionCost = st.SessionID, st.SessionRuns, st.SessionCost
+	return out
+}
+
+// DetourNote heads the summary of a round that ran beside a resident agent stuck on a dialog.
+const DetourNote = "（常驻会话停在确认框上，这一轮改在临时会话里跑了）"
+
+// detour runs a resident round the agent never got, because it was already stuck on a dialog, in a fresh
+// headless session instead of leaving it queued behind the dialog. The dialog itself was asked about by
+// the round that was running when it came up; the agent picks that up again once it is answered.
+func (e *Engine) detour(t task.Task, st store.State, dir string, rec store.RunRecord, input string, allow []string) outcome {
+	ht := t
+	ht.Mode = task.ModeHeadless
+	ht.Session.Mode = task.SessionFresh
+	e.cfg.Logf("%s: resident agent is stuck on a dialog, running %s in a fresh session", t.ID, rec.ID)
+	out := e.runAside(ht, st, dir, rec, input, allow)
+	out.res.Summary = DetourNote + "\n" + out.res.Summary
+	out.detour = true
 	return out
 }
 
@@ -439,10 +467,10 @@ func (e *Engine) finish(t task.Task, req Request, rec store.RunRecord, out outco
 		e.cfg.Logf("state %s: %v", t.ID, err)
 	}
 
-	rec.Status, rec.Summary, rec.Structured = out.status, out.res.Summary, out.structured
+	rec.Status, rec.Summary, rec.Structured, rec.Made = out.status, out.res.Summary, out.structured, out.res.Made
 	rec.Question, rec.Options, rec.Recommendation = out.res.Question, out.res.Options, out.res.Recommendation
 	rec.SessionID, rec.CostUSD, rec.Error, rec.EndedAt = out.sessionID, out.cost, out.errText, now
-	rec.Denied, rec.Refused, rec.Dialog = out.denied, out.refused, out.dialog
+	rec.Denied, rec.Refused, rec.Dialog, rec.Detour = out.denied, out.refused, out.dialog, out.detour
 	if err := s.AppendRun(rec); err != nil {
 		e.cfg.Logf("run %s: record end: %v", t.ID, err)
 	}
@@ -509,6 +537,18 @@ func statusLabel(s string) string {
 	return s
 }
 
+// interruptedNote heads the input of a run re-run after a restart cut it off: the cut run may already
+// have done part of the work, and doing it twice (a second MR, a second publish, a message sent again)
+// is worse than not at all.
+const interruptedNote = "（上一次跑到一半被守护进程重启打断了，这是重跑。先查清楚已经做到哪一步：MR 是否已提、发布是否已发、消息是否已发、待办是否已建，从断点继续，别重复做。）\n"
+
+func withInterruptedNote(input string) string {
+	if strings.HasPrefix(input, interruptedNote) {
+		return input
+	}
+	return interruptedNote + input
+}
+
 // RecoverInterrupted marks runs left "running" by a previous daemon as failed and returns the requests
 // to re-run: tasks whose run was cut short by a shutdown or crash. Call once at startup.
 func RecoverInterrupted(s *store.Store, now time.Time) ([]Request, error) {
@@ -529,7 +569,7 @@ func RecoverInterrupted(s *store.Store, now time.Time) ([]Request, error) {
 			if err := s.AppendRun(r); err != nil {
 				return redo, err
 			}
-			crashed, hasCrashed = r.Input, true
+			crashed, hasCrashed = withInterruptedNote(r.Input), true
 		}
 		st, err := s.UpdateState(t.ID, func(st store.State) store.State {
 			if st.Interrupted == nil && hasCrashed {
@@ -589,7 +629,7 @@ func (e *Engine) executeJob(t task.Task, st store.State, dir string, req Request
 			e.cfg.Logf("memory %s: %v", t.ID, err)
 		}
 	}
-	rec.Status, rec.Summary, rec.Structured = out.status, out.res.Summary, out.structured
+	rec.Status, rec.Summary, rec.Structured, rec.Made = out.status, out.res.Summary, out.structured, out.res.Made
 	rec.Question, rec.Options, rec.Recommendation = out.res.Question, out.res.Options, out.res.Recommendation
 	rec.SessionID, rec.CostUSD, rec.Error, rec.EndedAt = out.sessionID, out.cost, out.errText, e.cfg.Now()
 	rec.Denied, rec.Refused, rec.Dialog = out.denied, out.refused, out.dialog
@@ -618,7 +658,7 @@ func recoverJobs(s *store.Store, taskID string, now time.Time) ([]Request, error
 		if err := s.AppendRun(r); err != nil {
 			return redo, err
 		}
-		redo = append(redo, Request{TaskID: taskID, Trigger: ByJob, Input: r.Input, Job: r.Job, JobTitle: r.JobTitle})
+		redo = append(redo, Request{TaskID: taskID, Trigger: ByJob, Input: withInterruptedNote(r.Input), Job: r.Job, JobTitle: r.JobTitle})
 	}
 	return redo, nil
 }

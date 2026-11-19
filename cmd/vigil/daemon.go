@@ -20,6 +20,7 @@ import (
 	"vigil/internal/herdr"
 	"vigil/internal/idle"
 	"vigil/internal/inbox"
+	"vigil/internal/migrate"
 	"vigil/internal/notify"
 	"vigil/internal/patch"
 	"vigil/internal/probe"
@@ -84,6 +85,9 @@ func lockSingleton(root string) (*os.File, error) {
 func cmdDaemon(_ []string) error {
 	cfg, err := config.Load()
 	if err != nil {
+		return err
+	}
+	if err := migrate.RefuseMovedOut(cfg.Root); err != nil {
 		return err
 	}
 	lock, err := lockSingleton(cfg.Root)
@@ -166,6 +170,9 @@ func cmdDaemon(_ []string) error {
 		}}
 	srv.Now = time.Now
 	srv.Base = ctx
+	if home, err := os.UserHomeDir(); err == nil {
+		srv.Migrator = &server.Migrator{Home: home, Bin: selfPath(), Load: config.Load, Start: server.StartDetached}
+	}
 	srv.Replayer = replay.Runner{Bin: cfg.ClaudeBin, Model: cfg.ReplayModel}
 	kick := make(chan struct{}, 1)
 	checker := &health.Checker{Checks: cfg.Checks, Raise: srv.RaiseCheck, Resolve: srv.ResolveCheck, Logf: logf}
@@ -224,6 +231,7 @@ func cmdDaemon(_ []string) error {
 	go srv.FollowLoop(ctx)
 	go srv.PatchLoop(ctx)
 	go srv.NetWatchLoop(ctx)
+	go srv.DialogWatchLoop(ctx)
 	go srv.HarvestLoop(ctx)
 	go daemon.RunHealer(ctx, healer, streams, tickInterval) // after Intercept is set: it starts the streams
 	logf("vigil daemon started · console %s · claude %s · herdr %s (session %s)", cfg.URL(), cfg.ClaudeBin, cfg.HerdrBin, cfg.HerdrSession)

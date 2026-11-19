@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"vigil/internal/herdr"
 	"vigil/internal/task"
@@ -17,11 +18,14 @@ type fakeHerdr struct {
 	agents     map[string]bool
 	// focusedAtStart is how many focuses had happened when the agent was started.
 	focusedAtStart int
+	promptErr      error
+	screen         string
+	keys           [][]string
 }
 
 func (f *fakeHerdr) AgentGet(_ context.Context, name string) (herdr.Agent, error) {
 	if f.agents[name] {
-		return herdr.Agent{Name: name, Status: herdr.StatusIdle}, nil
+		return herdr.Agent{Name: name, Status: herdr.StatusIdle, WorkspaceID: "w9"}, nil
 	}
 	return herdr.Agent{}, herdr.ErrNoAgent
 }
@@ -38,9 +42,12 @@ func (f *fakeHerdr) StartAgent(_ context.Context, name, _, _ string, _ []string)
 	f.focusedAtStart = len(f.focused)
 	return nil
 }
-func (f *fakeHerdr) Prompt(context.Context, string, string) error      { return nil }
-func (f *fakeHerdr) Read(context.Context, string, int) (string, error) { return "", nil }
-func (f *fakeHerdr) SendKeys(context.Context, string, ...string) error { return nil }
+func (f *fakeHerdr) Prompt(context.Context, string, string) error      { return f.promptErr }
+func (f *fakeHerdr) Read(context.Context, string, int) (string, error) { return f.screen, nil }
+func (f *fakeHerdr) SendKeys(_ context.Context, _ string, keys ...string) error {
+	f.keys = append(f.keys, keys)
+	return nil
+}
 func (f *fakeHerdr) WorkspaceList(context.Context) ([]herdr.Workspace, error) {
 	return f.workspaces, nil
 }
@@ -131,5 +138,31 @@ func TestForgeKeepsEverythingATaskNeedsUnderVigil(t *testing.T) {
 		if !strings.Contains(p, want) {
 			t.Fatalf("forge prompt missing %q", want)
 		}
+	}
+}
+
+func TestStartShowsTheForgeInHerdrBeforeClaudeBoots(t *testing.T) {
+	f := &fakeHerdr{}
+	shown := 0
+	name, err := (Forge{H: f, Sleep: func(time.Duration) {}}).Start(context.Background(), "每天汇总 issue", func() { shown++ })
+	if err != nil || !strings.HasPrefix(name, "forge-") {
+		t.Fatalf("start = %q, %v", name, err)
+	}
+	if len(f.focused) != 1 || f.focused[0] != "w9" || f.focusedAtStart != 1 || shown != 1 {
+		t.Fatalf("forge not shown before boot: focused=%v focusedAtStart=%d shown=%d", f.focused, f.focusedAtStart, shown)
+	}
+}
+
+func TestShowBringsALiveForgeBack(t *testing.T) {
+	f := &fakeHerdr{agents: map[string]bool{"forge-a1": true}}
+	fg := Forge{H: f}
+	if err := fg.Show(context.Background(), "forge-a1"); err != nil || len(f.focused) != 1 || f.focused[0] != "w9" {
+		t.Fatalf("show: err=%v focused=%v", err, f.focused)
+	}
+	if err := fg.Show(context.Background(), "v-slack"); err == nil {
+		t.Fatal("showed a session Vigil does not manage")
+	}
+	if err := fg.Show(context.Background(), "forge-gone"); err == nil {
+		t.Fatal("showed a forge that is gone")
 	}
 }

@@ -59,6 +59,7 @@ type Outcome struct {
 	SessionID string
 	TimedOut  bool
 	Blocked   string // screen of an unknown dialog the owner must handle
+	Unsent    bool   // the agent was already stuck on Blocked before this turn's prompt reached it
 	Err       error
 }
 
@@ -192,7 +193,7 @@ func (e Executor) Turn(ctx context.Context, t task.Task, prompt string, rotate b
 	name := task.AgentName(t.ID)
 	a, err := e.Ensure(ctx, t)
 	if err != nil {
-		return blockedOrErr(err)
+		return unsent(blockedOrErr(err))
 	}
 	if rotate {
 		if err := e.clear(ctx, name); err != nil {
@@ -204,7 +205,7 @@ func (e Executor) Turn(ctx context.Context, t task.Task, prompt string, rotate b
 			return Outcome{Err: fmt.Errorf("prompt: %w", err)}
 		}
 		if _, derr := e.resolveDialog(ctx, name); derr != nil {
-			return blockedOrErr(derr)
+			return unsent(blockedOrErr(derr))
 		}
 		if err := Submit(ctx, e.H, name, prompt, e.sleep); err != nil {
 			return Outcome{Err: fmt.Errorf("prompt after dialog: %w", err)}
@@ -223,6 +224,12 @@ func blockedOrErr(err error) Outcome {
 		return Outcome{Blocked: u.Screen}
 	}
 	return Outcome{Err: err}
+}
+
+// unsent marks a dialog found before the prompt went in: the turn never reached the agent.
+func unsent(o Outcome) Outcome {
+	o.Unsent = o.Blocked != ""
+	return o
 }
 
 func (e Executor) clear(ctx context.Context, name string) error {

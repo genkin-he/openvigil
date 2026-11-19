@@ -41,7 +41,7 @@ func TestAnsweringADialogPressesItAndRerunsTheRoundsStuckBehindIt(t *testing.T) 
 	do(h, "POST", "/api/tasks", applyJSON("id: slack\nname: Slack\nenabled: true\ntrigger: {kind: manual}\n"), true)
 	f := &fakeDialogs{}
 	s.Dialogs = f
-	dialogRun(t, s, "r1", "小林：在吗", 100)       // in progress when the dialog came up: carries on by itself
+	dialogRun(t, s, "r1", "小林：在吗", 100)        // in progress when the dialog came up: carries on by itself
 	dialogRun(t, s, "r2", "小周：sitemap 呢", 200) // never reached the agent
 	dialogRun(t, s, "r3", "小周：sitemap 呢", 300) // the engine's retry of r2
 	dialogRun(t, s, "r4", "小吴：发版了吗", 400)

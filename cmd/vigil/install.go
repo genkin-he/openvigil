@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"vigil/internal/config"
+	"vigil/internal/migrate"
 )
 
 // label is the launchd service name, from config.yaml (launchd_label); set before any launchctl call.
@@ -67,6 +68,9 @@ func cmdInstall(args []string) error {
 		return err
 	}
 	label = cfg.LaunchdLabel
+	if err := migrate.RefuseMovedOut(cfg.Root); err != nil {
+		return err
+	}
 	if err := requireHerdr(cfg.HerdrBin); err != nil {
 		return err
 	}

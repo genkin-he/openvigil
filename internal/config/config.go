@@ -65,6 +65,9 @@ type Config struct {
 	EvolveTask string `yaml:"evolve_task,omitempty"`
 	// ReplayModel is the model that replays past rounds under changed rules (default sonnet).
 	ReplayModel string `yaml:"replay_model,omitempty"`
+	// MigrateExtra are state directories outside the Vigil home that tasks keep (a Slack cursor, say);
+	// vigil export packs them too. Written as ~/… or absolute, inside the home directory.
+	MigrateExtra []string `yaml:"migrate_extra,omitempty"`
 
 	Root  string `yaml:"-"`
 	Token string `yaml:"-"`
@@ -153,6 +156,19 @@ func withDefaults(c Config) Config {
 	}
 	if d, err := time.ParseDuration(out.CheckEvery); err != nil || d < time.Minute {
 		out.CheckEvery = defaultCheckEvery.String()
+	}
+	return out
+}
+
+// RepinTools looks the claude and herdr CLIs up again when the pinned paths no longer run (a config
+// brought over from another machine).
+func RepinTools(c Config) Config {
+	out := c
+	if !isExecutable(out.ClaudeBin) {
+		out.ClaudeBin = lookPath("claude")
+	}
+	if !isExecutable(out.HerdrBin) {
+		out.HerdrBin = lookPath("herdr")
 	}
 	return out
 }

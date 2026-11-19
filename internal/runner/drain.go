@@ -12,19 +12,60 @@ import (
 
 // Drain stops (on) or resumes (off) starting new runs. Queued requests stay queued; runs already going
 // finish normally. A drain switches itself off after expire, so a restart that never comes (an install
-// aborted halfway) cannot leave Vigil stalled.
+// aborted halfway) cannot leave Vigil stalled. Turning it off also stops holding jobs.
 func (e *Engine) Drain(on bool, expire time.Duration) {
 	e.mu.Lock()
 	e.draining = on
+	if !on {
+		e.holdJobs = false
+	}
 	e.drainGen++
 	gen := e.drainGen
+	e.mu.Unlock()
+	e.resumeLanes()
+	if on {
+		e.expireHold(gen, expire, "drain")
+	}
+}
+
+// HoldJobs stops (on) or resumes (off) starting background jobs only: rounds that answer people keep
+// running while an install waits for long jobs to finish, since a restart would cut those jobs off.
+func (e *Engine) HoldJobs(on bool, expire time.Duration) {
+	e.mu.Lock()
+	e.holdJobs = on
+	e.drainGen++
+	gen := e.drainGen
+	e.mu.Unlock()
+	e.resumeLanes()
+	if on {
+		e.expireHold(gen, expire, "job hold")
+	}
+}
+
+// expireHold lifts every hold after expire unless a later Drain or HoldJobs call took over.
+func (e *Engine) expireHold(gen int, expire time.Duration, what string) {
+	if expire <= 0 {
+		return
+	}
+	e.cfg.AfterFunc(expire, func() {
+		e.mu.Lock()
+		stale := e.drainGen != gen || (!e.draining && !e.holdJobs)
+		e.mu.Unlock()
+		if !stale {
+			e.cfg.Logf("%s not followed by a restart within %s, resuming runs", what, expire)
+			e.Drain(false, 0)
+		}
+	})
+}
+
+// resumeLanes starts every idle lane whose queued request is no longer held.
+func (e *Engine) resumeLanes() {
+	e.mu.Lock()
 	var resume []string
-	if !on {
-		for key, q := range e.qs {
-			if q.pending != nil && !q.running {
-				q.running = true
-				resume = append(resume, key)
-			}
+	for key, q := range e.qs {
+		if q.pending != nil && !q.running && !e.heldLocked(*q.pending) {
+			q.running = true
+			resume = append(resume, key)
 		}
 	}
 	e.mu.Unlock()
@@ -32,17 +73,17 @@ func (e *Engine) Drain(on bool, expire time.Duration) {
 		e.wg.Add(1)
 		go e.drain(key)
 	}
-	if on && expire > 0 {
-		e.cfg.AfterFunc(expire, func() {
-			e.mu.Lock()
-			stale := e.drainGen != gen || !e.draining
-			e.mu.Unlock()
-			if !stale {
-				e.cfg.Logf("drain not followed by a restart within %s, resuming runs", expire)
-				e.Drain(false, 0)
-			}
-		})
-	}
+}
+
+// heldLocked reports whether req must wait for a hold to lift. e.mu must be held.
+func (e *Engine) heldLocked(req Request) bool {
+	return e.draining || e.holdJobs && req.Job != ""
+}
+
+func (e *Engine) held(req Request) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.heldLocked(req)
 }
 
 // Draining reports whether new runs are held back.
@@ -50,6 +91,13 @@ func (e *Engine) Draining() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.draining
+}
+
+// HoldingJobs reports whether new background jobs are held back.
+func (e *Engine) HoldingJobs() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.holdJobs
 }
 
 // Running returns every run in progress, background jobs included, oldest first.

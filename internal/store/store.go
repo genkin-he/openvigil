@@ -57,6 +57,7 @@ type RunRecord struct {
 	Options        []string  `json:"options,omitempty"`
 	Recommendation string    `json:"recommendation,omitempty"`
 	Dialog         bool      `json:"dialog,omitempty"`  // stopped on a dialog in the agent's session; Options answer it there
+	Detour         bool      `json:"detour,omitempty"`  // ran in a fresh session because the resident agent was stuck on a dialog
 	Denied         []string  `json:"denied,omitempty"`  // allow rules for operations the permission rules refused
 	Refused        []string  `json:"refused,omitempty"` // operations the auto mode classifier refused ("tool：reason")
 	Structured     bool      `json:"structured"`
@@ -68,6 +69,7 @@ type RunRecord struct {
 	Model          string    `json:"model,omitempty"`     // set when the run used a model other than the task's (the light lane)
 	Error          string    `json:"error,omitempty"`
 	CostUSD        float64   `json:"cost_usd,omitempty"`
+	Made           []string  `json:"made,omitempty"` // what the run newly produced (an MR, a comment…), as reported
 	StartedAt      time.Time `json:"started_at"`
 	EndedAt        time.Time `json:"ended_at,omitzero"`
 }
@@ -268,7 +270,7 @@ func (s *Store) archive(id, path string) error {
 	return writeAtomic(filepath.Join(dir, name), old)
 }
 
-// AppendMemory adds dated lines to memory.md.
+// AppendMemory adds dated lines to memory.md, then moves routine notes past their week to the archive.
 func (s *Store) AppendMemory(id string, notes []string, at time.Time) error {
 	var b strings.Builder
 	for _, n := range notes {
@@ -292,7 +294,10 @@ func (s *Store) AppendMemory(id string, notes []string, at time.Time) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return appendFile(path, []byte(b.String()))
+	if err := appendFile(path, []byte(b.String())); err != nil {
+		return err
+	}
+	return archiveOldMemory(path, at)
 }
 
 // SaveProposal stores a proposed runbook awaiting approval and returns its name.

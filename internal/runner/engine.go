@@ -108,6 +108,7 @@ type Engine struct {
 	// draining stops new runs from starting (requests stay queued) so a restart can wait for the
 	// runs in progress instead of cutting them off; drainGen invalidates an older auto-expiry.
 	draining bool
+	holdJobs bool // only background jobs are held: an install waiting for long jobs
 	drainGen int
 }
 
@@ -167,7 +168,7 @@ func (e *Engine) Submit(req Request) {
 		req = merge(*q.pending, req)
 	}
 	q.pending = &req
-	start := !q.running && !e.draining
+	start := !q.running && !e.heldLocked(*q.pending)
 	if start {
 		q.running = true
 	}
@@ -203,7 +204,7 @@ func (e *Engine) drain(key string) {
 	for {
 		e.mu.Lock()
 		q := e.qs[key]
-		if q.pending == nil || e.ctx.Err() != nil || e.draining {
+		if q.pending == nil || e.ctx.Err() != nil || e.heldLocked(*q.pending) {
 			q.running = false
 			e.mu.Unlock()
 			return
@@ -222,7 +223,7 @@ func (e *Engine) drain(key string) {
 			e.requeue(key, req) // kept for the queue file written at shutdown
 			continue
 		}
-		if e.Draining() {
+		if e.held(req) {
 			e.requeue(key, req) // the lane stays ours; the loop top releases it while draining
 			<-slots
 			continue
@@ -303,7 +304,7 @@ func (e *Engine) Report(runID string, r result.Result) error {
 	ch, ok := e.wait[runID]
 	e.mu.Unlock()
 	if !ok {
-		return ErrUnknownRun
+		return e.lateReport(runID, r)
 	}
 	select {
 	case ch <- r:

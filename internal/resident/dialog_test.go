@@ -100,3 +100,11 @@ func TestAnswerDialogPressesTheOptionOnlyOnTheSameDialog(t *testing.T) {
 		t.Fatalf("pressed a lasting allow: err=%v keys=%v", err, f.keys)
 	}
 }
+
+func TestReadPromptCollectsOptionsSplitByDescriptionsAndRules(t *testing.T) {
+	screen := "❯ 1. 全部 (Recommended)\n     说明一\n  2. 部分\n     说明二\n  3. Type something.\n──────────────\n  4. Chat about this\n\nEnter to select\n"
+	p := ReadPrompt("问题是什么？\n" + screen)
+	if strings.Join(p.Options, "|") != "全部 (Recommended)|部分|Type something.|Chat about this" || strings.Join(p.Keys, "") != "1234" {
+		t.Fatalf("prompt = %+v", p)
+	}
+}

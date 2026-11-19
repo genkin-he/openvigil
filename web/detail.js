@@ -95,6 +95,17 @@ function render() {
   keepFocus(draw);
 }
 
+/** What the task cost over the last week and what it produced for that; nothing when it cost nothing. */
+function weekLine(week) {
+  if (!week || !week.cost_usd) return null;
+  const o = week.output || {};
+  const cost = week.cost_usd.toFixed(2);
+  const text = o.total
+    ? t("detail.week", { cost, total: o.total, made: o.made, replies: o.replies, taken: o.todos_taken, per: (o.cost_per_output || 0).toFixed(2) })
+    : t("detail.weekNone", { cost });
+  return h("p", { class: "d-meta d-week", text });
+}
+
 function draw() {
   const { view, held } = current.data;
   const task = view.task;
@@ -109,6 +120,7 @@ function draw() {
         h("button", { class: "lang", id: "d-tour", type: "button", text: t("tour.btn"), title: t("tour.tabsTitle"), "aria-label": t("tour.tabsTitle"),
           onclick: () => startTabsTour() }),
         h("button", { class: "close", type: "button", "aria-label": t("detail.close"), text: "×", onclick: () => { location.hash = ""; } }))),
+    weekLine(current.data.week),
     held ? h("p", { class: "note", text: t("detail.held") }) : null,
     view.needs_you ? needsBlock(task.id, view.needs_you) : null,
     view.answered ? h("p", { class: "answered", text: t("detail.answeredQ", { q: view.answered.question, a: view.answered.answer }) }) : null,

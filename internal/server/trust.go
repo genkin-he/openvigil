@@ -8,12 +8,17 @@ import (
 	"time"
 
 	"vigil/internal/inbox"
+	"vigil/internal/replay"
 )
 
 // Trust per kind of to-do: how often the agent's draft is taken as is, and how often raising it was
 // noise. Only reasoned decisions count: a to-do that went stale, or an old dismissal without a reason,
 // says nothing either way.
 const trustWindow = 30 * 24 * time.Hour
+
+// handAdopt is how close a reply the owner wrote by hand in Slack must be to the agent's draft to count
+// as the draft taken: near word for word. A looser match could be a different answer in similar words.
+const handAdopt = 0.8
 
 // KindTrust is one kind's record over trustWindow.
 type KindTrust struct {
@@ -30,8 +35,9 @@ type KindTrust struct {
 var authorizedLine = regexp.MustCompile(`^-?\s*(\d{4}-\d{2}-\d{2})?\s*我已授权`)
 
 // trustFor computes the per-kind record of one task's to-dos; memory is the task's long-term memory,
-// where accepted authorizations live as「我已授权：「<kind>」…」lines.
-func trustFor(items []inbox.Item, memory, taskID string, now time.Time) []KindTrust {
+// where accepted authorizations live as「我已授权：「<kind>」…」lines. hand is what the owner wrote by
+// hand in each to-do's Slack conversation, by to-do id.
+func trustFor(items []inbox.Item, memory string, hand map[string]string, taskID string, now time.Time) []KindTrust {
 	cutoff := now.Add(-trustWindow)
 	byKind := map[string]*KindTrust{}
 	counts := map[string]map[string]int{} // kind → decision → drafted count
@@ -56,6 +62,13 @@ func trustFor(items []inbox.Item, memory, taskID string, now time.Time) []KindTr
 			counts[it.Kind][inbox.DecisionNoise]++
 		case inbox.DecisionHandledElsewhere:
 			k.Samples++
+			draft, wrote := draftOf(it), hand[it.ID]
+			if draft != "" && wrote != "" {
+				k.Drafted++
+				if replay.Similarity(draft, wrote) >= handAdopt {
+					counts[it.Kind][inbox.DecisionAsIs]++
+				}
+			}
 		}
 	}
 	out := make([]KindTrust, 0, len(byKind))
@@ -79,6 +92,31 @@ func trustFor(items []inbox.Item, memory, taskID string, now time.Time) []KindTr
 		}
 		return out[i].Kind < out[j].Kind
 	})
+	return out
+}
+
+// draftOf is the reply the agent had for a to-do: the one offered for sending, else the one it kept to itself.
+func draftOf(it inbox.Item) string {
+	if strings.TrimSpace(it.Reply) != "" {
+		return it.Reply
+	}
+	return it.Shadow
+}
+
+// handReplies is what the owner wrote by hand in each to-do's conversation, by to-do id, oldest first.
+func (s *Server) handReplies() map[string]string {
+	all, err := s.ownerReplies().list()
+	if err != nil {
+		s.logf("owner replies: %v", err)
+		return nil
+	}
+	out := map[string]string{}
+	for _, r := range all {
+		if out[r.Todo] != "" {
+			out[r.Todo] += "\n"
+		}
+		out[r.Todo] += r.Text
+	}
 	return out
 }
 
@@ -106,7 +144,7 @@ func (s *Server) taskTrust(_ http.ResponseWriter, r *http.Request) (any, error) 
 		return nil, err
 	}
 	memory, _ := s.Store.ReadDoc(id, "memory.md")
-	kinds := trustFor(items, memory, id, s.Now())
+	kinds := trustFor(items, memory, s.handReplies(), id, s.Now())
 	for i := range kinds {
 		kinds[i].Proposal = proposalState(items, id, kinds[i].Kind)
 	}

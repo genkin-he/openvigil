@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -186,5 +187,79 @@ func TestAnAsIsTodoOnlyTakesRepliesInItsThread(t *testing.T) {
 	s.harvestOwnerReplies(context.Background())
 	if got := samplesByTodo(t, s); len(got[it.ID]) != 1 || got[it.ID][0] != "补一句：带上文档" {
 		t.Fatalf("samples = %v", got)
+	}
+}
+
+// A to-do raised without a sendable draft keeps the reply the agent would have sent; the owner's own
+// reply is set against it, so even kinds the agent may not answer build up a record.
+func TestOwnerRepliesAreSetAgainstTheReplyTheAgentKeptToItself(t *testing.T) {
+	s, _ := mirrorServer(t)
+	s.Mirror = nil
+	f := &fakeEvolve{}
+	s.Evolve = f.evolver("evo")
+	s.Threads = &threadsByChannel{threads: map[string][]slackctl.Message{"C1:1794369309.0": {
+		{TS: "1794369309.0", User: "U0HUI", Text: "这个需求这周能排吗"},
+		{TS: "1794370166.0", User: "U0SELF", Text: "这周排不进，下周三开始"},
+	}}}
+	ch := addAt(t, s, 1794369400, inbox.Item{TaskID: "slack", Kind: "要排期", Title: "小林：排期",
+		Shadow: "今天就可以开始做", Ref: "C1:1794369309.0", Target: "slack:C1:1794369309.0"})
+	s.AnswerTodoReason(ch.ID, TodoDismiss, "", inbox.DecisionHandledElsewhere)
+
+	s.Now = func() time.Time { return time.Unix(1794380000, 0) }
+	s.harvestOwnerReplies(context.Background())
+
+	got, _ := s.ownerReplies().list()
+	if len(got) != 1 || got[0].Draft != "今天就可以开始做" || !got[0].Shadow {
+		t.Fatalf("samples = %+v", got)
+	}
+	if len(f.timers) != 1 {
+		t.Fatal("a hand reply far from the agent's own answer must wake self-evolution")
+	}
+}
+
+func TestAnOpenTodoTheOwnerAnsweredInSlackClosesItself(t *testing.T) {
+	s, _ := mirrorServer(t)
+	s.Mirror = nil
+	f := &fakeEvolve{}
+	s.Evolve = f.evolver("evo")
+	s.Threads = &threadsByChannel{threads: map[string][]slackctl.Message{
+		"C1:1794369309.0": {
+			{TS: "1794369309.0", User: "U0HUI", Text: "配图能直接用 CDN 吗"},
+			{TS: "1794370166.0", User: "U0SELF", Text: "可以，直接用 CDN 地址"},
+		},
+		"C2:1794369309.0": {
+			{TS: "1794369309.0", User: "U0HUI", Text: "帮忙点下审批"},
+			{TS: "1794370166.0", User: "U0SELF", Text: "稍等"},
+		},
+		"C3:1794369309.0": {{TS: "1794369309.0", User: "U0HUI", Text: "还在吗"}}, // no reply from the owner
+		"C4:1794369309.0": {
+			{TS: "1794369309.0", User: "U0HUI", Text: "这个需求要不要做"},
+			{TS: "1794370166.0", User: "U0SELF", Text: "我看看哈"},
+		},
+	}}
+	answered := addAt(t, s, 1794369400, inbox.Item{TaskID: "slack", Kind: "问接口", Title: "小林：配图",
+		Reply: "可以直接用社区 CDN 地址。", Ref: "C1:1794369309.0", Target: "slack:C1:1794369309.0"})
+	byHandOnly := addAt(t, s, 1794369400, inbox.Item{TaskID: "slack", Title: "去审批页点通过", Owner: true,
+		Ref: "C2:1794369309.0", Target: "slack:C2:1794369309.0"})
+	silent := addAt(t, s, 1794369400, inbox.Item{TaskID: "slack", Title: "还在吗", Ref: "C3:1794369309.0", Target: "slack:C3:1794369309.0"})
+
+	holding := addAt(t, s, 1794369400, inbox.Item{TaskID: "slack", Kind: "要不要做", Title: "要不要做", Ref: "C4:1794369309.0", Target: "slack:C4:1794369309.0"})
+
+	s.Now = func() time.Time { return time.Unix(1794380000, 0) }
+	s.harvestOwnerReplies(context.Background())
+
+	if got, _ := s.Inbox.Get(holding.ID); got.Status != inbox.StatusOpen {
+		t.Fatalf("a holding reply closed the to-do: %+v", got)
+	}
+	got, _ := s.Inbox.Get(answered.ID)
+	if got.Status != inbox.StatusDone || got.Decision != inbox.DecisionHandledElsewhere || !strings.Contains(got.Outcome, "可以，直接用 CDN 地址") {
+		t.Fatalf("answered to-do = %+v", got)
+	}
+	// A to-do only the owner can do (approve on a page, say) is not done just because he wrote in the thread.
+	if got, _ := s.Inbox.Get(byHandOnly.ID); got.Status != inbox.StatusOpen {
+		t.Fatalf("owner-only to-do closed: %+v", got)
+	}
+	if got, _ := s.Inbox.Get(silent.ID); got.Status != inbox.StatusOpen {
+		t.Fatalf("to-do with no owner reply closed: %+v", got)
 	}
 }

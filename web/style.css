@@ -210,6 +210,7 @@ button, input, textarea { font: inherit; color: inherit; }
 .headline .live { color: var(--live); }
 .run-model { margin: 4px 0 0; font: 500 var(--text-sm) var(--font-body); color: var(--muted, inherit); opacity: .8; }
 .run-job { margin: 4px 0 0; font: 600 var(--text-sm) var(--font-body); color: var(--live); }
+.chip.proposal { border-color: rgba(255, 181, 71, .45); color: var(--warn); background: rgba(255, 181, 71, .08); }
 .chip.resident { border-color: rgba(124, 199, 255, .4); color: var(--live); background: rgba(124,199,255,.06); }
 .task-last {
   margin: 6px 0 0; font-size: var(--text-sm); line-height: 1.55; color: var(--ink-2);
@@ -247,10 +248,22 @@ button, input, textarea { font: inherit; color: inherit; }
 .follows { padding: 10px 14px; border-radius: var(--radius-l); border: 1px solid var(--line); background: var(--panel); font-size: var(--text-sm); }
 .follows summary { cursor: pointer; color: var(--ink-2); }
 .follows ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
-.follow { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; min-width: 0; }
-.follow > :first-child { overflow-wrap: anywhere; }
-.follow-meta { color: var(--muted); font-family: var(--font-mono); font-size: var(--text-xs); }
+/* Title on top, who/when underneath, ✓ and × at the right: long text on either line wraps in place
+   instead of squeezing the other into a one-character column. */
+.follow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 12px; min-width: 0; }
+.follow > :first-child { grid-column: 1; overflow-wrap: anywhere; }
+.follow-meta { grid-column: 1; overflow-wrap: anywhere; color: var(--muted); font-family: var(--font-mono); font-size: var(--text-xs); }
 .follow.is-due .follow-meta { color: var(--warn); }
+.follow-checking { display: none; color: var(--ok); }
+.follow.is-checking .follow-checking { display: inline; }
+.follow-actions { grid-column: 2; grid-row: 1 / span 2; display: inline-flex; gap: 4px; }
+.follow-btn {
+  width: 22px; height: 22px; padding: 0; border-radius: var(--radius-s); cursor: pointer; line-height: 1;
+  background: transparent; border: 1px solid transparent; color: var(--muted); font-size: var(--text-sm);
+}
+.follow-btn:hover, .follow-btn:focus-visible { color: var(--ink); border-color: var(--line-strong); background: rgba(255,255,255,.04); }
+.follow-check:hover, .follow-check:focus-visible { color: var(--ok); }
+.follow-btn:disabled, .follow.is-checking .follow-check { opacity: .4; cursor: default; pointer-events: none; }
 .option {
   padding: 7px 12px; border-radius: var(--radius-s); cursor: pointer; text-align: left;
   background: rgba(255,255,255,.03); border: 1px solid var(--line-strong); font-size: var(--text-sm);
@@ -588,6 +601,46 @@ a.ext:hover { text-decoration-color: var(--live); }
 .settings-choice[aria-checked="true"] { border-color: var(--ok); background: rgba(94, 242, 184, .07); }
 .settings-row { display: flex; align-items: center; gap: 12px; }
 .settings-hint { flex: 1; margin: 0; font-size: var(--text-xs); line-height: 1.55; color: var(--muted); }
+
+/* Move & health check (settings) */
+.settings-row .btn { flex: none; }
+.mig-part + .mig-part { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.mig-out:empty { display: none; }
+.mig-out { margin-top: 10px; }
+.mig-note { margin: 8px 0 0; font-size: var(--text-xs); line-height: 1.55; color: var(--live); }
+.mig-sum { margin: 0 0 8px; font-size: var(--text-sm); font-weight: 600; }
+.mig-sum.ok { color: var(--ok); }
+.mig-sum.bad { color: var(--bad); }
+.mig-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.mig-passed { margin-top: 6px; }
+.mig-passed summary { cursor: pointer; color: var(--muted); font-size: var(--text-xs); letter-spacing: .04em; padding: 2px 0 6px; }
+.mig-item { display: flex; gap: 8px; padding: 6px 8px; border-radius: var(--radius-s); font-size: var(--text-sm); }
+.mig-item.bad { background: rgba(255, 93, 108, .06); }
+.mig-mark { flex: none; width: 1.1em; font: 700 var(--text-sm) var(--font-mono); }
+.mig-item.ok .mig-mark { color: var(--ok); }
+.mig-item.bad .mig-mark { color: var(--bad); }
+.mig-body { min-width: 0; flex: 1; }
+.mig-body b { display: block; font-weight: 500; color: var(--ink); overflow-wrap: anywhere; }
+.mig-item.ok .mig-body b { color: var(--ink-2); font-weight: 400; }
+.mig-detail {
+  margin: 6px 0 0; padding: 6px 8px; border-radius: var(--radius-s); background: #03060c; border: 1px solid var(--line);
+  font: 400 11.5px/1.5 var(--font-mono); color: #cfe0f5; white-space: pre-wrap; word-break: break-word; max-height: 8em; overflow: auto;
+}
+.mig-hint { margin: 6px 0 0; font-size: var(--text-xs); line-height: 1.55; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.mig-plan h4 { margin: 12px 0 6px; font: 600 var(--text-xs) var(--font-body); color: var(--ink); }
+.mig-plan h4:first-child { margin-top: 0; }
+.mig-paths { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.mig-paths li { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 10px; font-size: var(--text-xs); color: var(--muted); }
+.mig-paths .bad { color: var(--warn); }
+.mig code, .mig-cmd { font: 400 var(--text-xs) var(--font-mono); color: var(--ink); overflow-wrap: anywhere; }
+.mig-go { margin-top: 12px; display: flex; justify-content: flex-end; }
+.mig-go .btn.danger { border-color: rgba(255, 93, 108, .45); color: var(--bad); }
+.mig-started dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: baseline; font-size: var(--text-xs); }
+.mig-started dt { color: var(--muted); }
+.mig-started dd { margin: 0; min-width: 0; }
+.mig-cmd-row { display: flex; align-items: center; gap: 8px; }
+.mig-cmd { flex: 1; padding: 6px 8px; border-radius: var(--radius-s); background: #03060c; border: 1px solid var(--line); color: var(--ok); }
+.mig-cmd-row .btn { flex: none; padding: 4px 10px; font-size: var(--text-xs); }
 .sketch { display: grid; gap: 3px; width: 100%; height: 40px; margin-bottom: 4px; align-content: start; }
 .sketch i { display: block; border-radius: 2px; background: rgba(150, 172, 214, .28); }
 .sketch i.warn { background: rgba(255, 181, 71, .65); }

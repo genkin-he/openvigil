@@ -92,6 +92,18 @@ Each task is a set of files under `~/.vigil/tasks/<id>/`:
 
 The `task.yaml` fields are documented in `internal/forge/prompt.go`, the guide the forge agent follows when it creates a task.
 
+## Moving to another computer
+
+```bash
+vigil export                     # old machine: finish work in progress, stop the service, pack one archive (in ~ by default)
+bin/vigil import <archive>       # new machine, after cloning and make build: unpack, rewrite paths, check, then make install once all pass
+vigil doctor                     # check tools, logins and the repos/directories tasks use, any time
+```
+
+The archive holds all of `~/.vigil` plus the state directories listed under `migrate_extra` in `config.yaml`. The console token and logins never travel: a new token is made, and the check lists each login to redo. The old machine is marked as moved and refuses to start again, so two machines never answer the same messages.
+
+The console does the same without a terminal: Settings → "Move & health check". "Run health check" lists every login, tool, repo and directory, with a fix hint for each one that fails. "Prepare a move" shows what will be packed and what the new machine needs; on confirm it runs `vigil export` in the background and shows the archive path, its log and the command to run on the new machine. Vigil on this machine stops once packing is done, so the page losing its connection is expected. A failed login check's to-do also has a "Full health check" button that opens this section.
+
 ## How self-evolution works
 
 1. **Feedback** comes from four places:

@@ -150,7 +150,9 @@ type signalsView struct {
 	Since       time.Time    `json:"since"`
 	Corrections []Correction `json:"corrections"`
 	// OwnerReplies are what the owner wrote by hand in to-dos' conversations: the draft next to the real reply.
-	OwnerReplies []OwnerReply  `json:"owner_replies"`
+	OwnerReplies []OwnerReply `json:"owner_replies"`
+	// AfterReplies are agent replies sent with the owner's account and what the asker said next.
+	AfterReplies []Aftermath   `json:"after_replies"`
 	Todos        []signalTodo  `json:"todos"`
 	Runs         []signalRun   `json:"runs"`
 	LedgerDue    []LedgerEntry `json:"ledger_due"`
@@ -177,6 +179,10 @@ func (s *Server) signals(_ http.ResponseWriter, r *http.Request) (any, error) {
 		return nil, err
 	}
 	view.OwnerReplies = orEmpty(view.OwnerReplies)
+	if view.AfterReplies, err = aftermathSince(s.aftermathLog(), since, signalMaxPerSet); err != nil {
+		return nil, err
+	}
+	view.AfterReplies = orEmpty(view.AfterReplies)
 	if view.Runs, err = s.runSignals(since); err != nil {
 		return nil, err
 	}

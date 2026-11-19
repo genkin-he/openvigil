@@ -95,7 +95,7 @@ func TestRecoverReRunsInterruptedJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(redo) != 1 || redo[0].Job != "j-bbbbbb" || redo[0].Input != "修 bug" {
+	if len(redo) != 1 || redo[0].Job != "j-bbbbbb" || redo[0].Input != interruptedNote+"修 bug" {
 		t.Fatalf("redo = %+v (the main lane must not be re-run for a job)", redo)
 	}
 	runs, _ := s.Runs("slack", 0)

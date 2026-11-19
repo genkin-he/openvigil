@@ -16,7 +16,11 @@ const (
 	Fail     = "fail"
 )
 
-const maxSummary = 2000
+const (
+	maxSummary = 2000
+	maxMade    = 20  // items kept from one run
+	maxMadeLen = 300 // characters kept per item
+)
 
 // Result is what an agent reports for one run.
 type Result struct {
@@ -26,6 +30,8 @@ type Result struct {
 	Options        []string `json:"options,omitempty"`
 	Recommendation string   `json:"recommendation,omitempty"`
 	Memory         []string `json:"memory,omitempty"`
+	// Made lists what the run newly produced, one item each with its link (an MR, a comment, a ticket).
+	Made []string `json:"made,omitempty"`
 }
 
 var fence = regexp.MustCompile("(?s)```json\\s*\\n(.*?)\\n```")
@@ -50,6 +56,7 @@ func Validate(r Result) (Result, error) {
 	}
 	out.Options = append([]string(nil), r.Options...)
 	out.Memory = append([]string(nil), r.Memory...)
+	out.Made = madeItems(r.Made)
 	return out, nil
 }
 
@@ -88,4 +95,22 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// madeItems trims the produced items, drops empty and repeated ones, and bounds them.
+func madeItems(in []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range in {
+		m = truncate(strings.TrimSpace(m), maxMadeLen)
+		if m == "" || seen[m] {
+			continue
+		}
+		seen[m] = true
+		out = append(out, m)
+		if len(out) == maxMade {
+			break
+		}
+	}
+	return out
 }

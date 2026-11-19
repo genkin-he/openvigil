@@ -168,3 +168,19 @@ func TestSubmitPressesEnterWhenPasteIsStuck(t *testing.T) {
 		t.Fatalf("keys = %v", f.keys)
 	}
 }
+
+func TestTurnOnAnAgentAlreadyStuckSaysThePromptWasNeverSent(t *testing.T) {
+	f := &fakeHerdr{exists: true, statuses: []string{herdr.StatusBlocked}, screen: permissionScreen}
+	out := exe(f).Turn(context.Background(), residentTask(), "新一轮", false, nil)
+	if out.Blocked == "" || !out.Unsent || len(f.prompts) != 0 {
+		t.Fatalf("outcome = %+v, prompts = %q", out, f.prompts)
+	}
+}
+
+func TestTurnStuckAfterThePromptWentInIsNotUnsent(t *testing.T) {
+	f := &fakeHerdr{exists: true, statuses: []string{herdr.StatusIdle, herdr.StatusWorking, herdr.StatusBlocked}, screen: permissionScreen}
+	out := exe(f).Turn(context.Background(), residentTask(), "这一轮", false, nil)
+	if out.Blocked == "" || out.Unsent || len(f.prompts) != 1 {
+		t.Fatalf("outcome = %+v, prompts = %q", out, f.prompts)
+	}
+}

@@ -23,3 +23,15 @@ func TestDrainEndpoints(t *testing.T) {
 		t.Fatalf("drain off: %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestDrainEndpointCanHoldJustJobs(t *testing.T) {
+	s, h := newServer(t)
+	rec, _ := do(h, "POST", "/api/drain", `{"on":true,"jobs":true}`, true)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"holding_jobs":true`) || s.Engine.Draining() {
+		t.Fatalf("hold jobs: %d %s", rec.Code, rec.Body)
+	}
+	do(h, "POST", "/api/drain", `{"on":false}`, true)
+	if s.Engine.HoldingJobs() {
+		t.Fatal("drain off kept holding jobs")
+	}
+}

@@ -32,6 +32,7 @@ const (
 	followMaxHands  = 3               // hand-offs the task let pass without settling the item before it goes to the owner
 	followPeekEvery = 5 * time.Minute // how often channel threads with an open follow-up are read for replies
 	followReplyLen  = 500
+	followCheckGap  = 2 * time.Minute // an owner's "check now" is not handed again before this
 )
 
 // ThreadReader reads Slack threads as the owner. Replies in channel threads that do not mention the
@@ -65,6 +66,7 @@ type Follow struct {
 	Handed  time.Time `json:"handed_at,omitzero"`   // when the due item was last given to its task
 	Hands   int       `json:"hands,omitempty"`      // hand-offs since the task last settled or snoozed it
 	Seen    string    `json:"seen_reply,omitempty"` // ts of the last thread reply handed to the task
+	Checked time.Time `json:"checked_at,omitzero"`  // when the owner last asked the task to check it now
 	Created time.Time `json:"created_at"`
 	Updated time.Time `json:"updated_at"`
 }
@@ -228,6 +230,55 @@ func (s *Server) followSnooze(_ http.ResponseWriter, r *http.Request) (any, erro
 		s.changed(f.Task, "follow")
 	}
 	return f, err
+}
+
+// followCheck is the owner saying a follow-up may be settled already: its task checks now instead of
+// at the due time. It does not count as a hand-off and leaves the due time alone, so if nothing came
+// back the item simply keeps waiting.
+func (s *Server) followCheck(_ http.ResponseWriter, r *http.Request) (any, error) {
+	now := s.Now()
+	f, err := s.follows().update(r.PathValue("id"), func(f Follow) (Follow, error) {
+		if f.Status != FollowWaiting {
+			return f, badRequest("%s 已经结了", f.ID)
+		}
+		if !f.Checked.IsZero() && now.Sub(f.Checked) < followCheckGap {
+			return f, badRequest("刚让它去核实过，等这一轮跑完再看")
+		}
+		f.Checked, f.Updated = now, now
+		return f, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.changed(f.Task, "follow")
+	s.Engine.Submit(runner.Request{TaskID: f.Task, Trigger: runner.ByFollow, Input: followCheckInput(f, s.vigilBin())})
+	return f, nil
+}
+
+func followCheckInput(f Follow, bin string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "我在控制台点了「核实」，跟进 %s 可能已经办好了，现在去确认：%s\n", f.ID, f.Title)
+	writeFollowFacts(&b, f)
+	b.WriteString("\n去对方那边或链接里看事情是不是真的办完了（流水线、发布单、MR、工单看实际状态，线程看有没有回复）：\n")
+	fmt.Fprintf(&b, "- 办完了：照原来的事接着做后面的步骤（该通知的通知、该回复的回复、该关的关；先读原线程，确认我或别人还没说过），然后 %s follow done %s --outcome \"<查到的结果>\"\n", bin, f.ID)
+	b.WriteString("- 还没办完：什么都不做，不要追问对方、不要改到期时间，这条继续等；在本轮结果里写一句现在卡在哪。\n")
+	return b.String()
+}
+
+// writeFollowFacts writes what a follow-up waits for, for the task that handles it.
+func writeFollowFacts(b *strings.Builder, f Follow) {
+	if f.Who != "" {
+		fmt.Fprintf(b, "在等：%s\n", f.Who)
+	}
+	if f.Ask != "" {
+		fmt.Fprintf(b, "当时问了 / 提了：%s\n", f.Ask)
+	}
+	if f.Link != "" {
+		fmt.Fprintf(b, "去这里看：%s\n", f.Link)
+	}
+	if f.Ref != "" {
+		fmt.Fprintf(b, "ref：%s\n", f.Ref)
+	}
 }
 
 // FollowLoop hands due follow-ups to their tasks until ctx ends.

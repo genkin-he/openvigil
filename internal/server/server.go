@@ -70,11 +70,14 @@ type Server struct {
 	// Mirror posts to-dos to the owner's Slack self-DM and takes answers from their threads (optional).
 	Mirror *TodoMirror
 
-	muted sync.Map // check ref → time the owner put its to-do away
+	muteLog  *muteLog // system to-dos the owner put away, kept on disk so a restart does not bring them back
+	muteOnce sync.Once
 	// Replayer replays past rounds under changed rules, with no tools (see package replay).
 	Replayer replay.Runner
 	// Evolve wakes the self-evolution task when the owner's feedback arrives (optional).
 	Evolve *Evolver
+	// Migrator runs the health check and starts a move to another computer (optional).
+	Migrator *Migrator
 
 	correct     *corrections
 	correctOnce sync.Once
@@ -84,6 +87,8 @@ type Server struct {
 	followLog   *followStore
 	ownerLog    *ownerReplyLog
 	ownerOnce   sync.Once
+	afterLog    *aftermathLog
+	afterOnce   sync.Once
 	followOnce  sync.Once
 	bg          sync.WaitGroup
 	// Base is the daemon's lifetime; long background work (the self-test) stops with it.
@@ -153,6 +158,7 @@ func (s *Server) Handler() http.Handler {
 	api("POST /api/follows", s.followAdd)
 	api("POST /api/follows/{id}/done", s.followDone)
 	api("POST /api/follows/{id}/snooze", s.followSnooze)
+	api("POST /api/follows/{id}/check", s.followCheck)
 	api("GET /api/evolve/signals", s.signals)
 	api("GET /api/evolve/ledger", s.ledgerList)
 	api("POST /api/evolve/replay", s.replayStart)
@@ -164,9 +170,13 @@ func (s *Server) Handler() http.Handler {
 	api("PUT /api/owner", s.ownerPut)
 	api("GET /api/drain", s.drainStatus)
 	api("POST /api/drain", s.setDrain)
+	api("GET /api/migrate/doctor", s.migrateDoctor)
+	api("GET /api/migrate/plan", s.migratePlan)
+	api("POST /api/migrate/export", s.migrateExport)
 	api("GET /api/forge", s.forgeList)
 	api("POST /api/forge", s.forgeStart)
 	api("POST /api/forge/{name}/say", s.forgeSay)
+	api("POST /api/forge/{name}/show", s.forgeShow)
 	api("GET /api/forge/{name}/screen", s.forgeScreen)
 	api("GET /api/forge/{name}/status", s.forgeStatusHandler)
 	api("POST /api/forge/{name}/close", s.forgeClose)

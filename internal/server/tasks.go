@@ -62,7 +62,9 @@ func (s *Server) view(t task.Task, live map[string]runner.LiveRun, now time.Time
 			v.Recent = append(v.Recent, r)
 		}
 	}
-	if v.LastRun != nil && v.LastRun.Status == store.StatusNeedsYou {
+	if d, ok := openDialog(runs, v.State); ok {
+		v.NeedsYou = &d
+	} else if v.LastRun != nil && v.LastRun.Status == store.StatusNeedsYou {
 		if v.State.AnsweredRun == v.LastRun.ID {
 			v.Answered = &Answered{Question: v.LastRun.Question, Answer: v.State.AnsweredText}
 		} else {
@@ -99,7 +101,7 @@ func (s *Server) overview(_ http.ResponseWriter, _ *http.Request) (any, error) {
 	if err != nil {
 		problems = append(problems, "读跟进失败："+err.Error())
 	}
-	return map[string]any{"now": now, "tasks": views, "todos": todos, "follows": follows, "problems": problems, "draining": s.Engine.Draining()}, nil
+	return map[string]any{"now": now, "tasks": sortViews(views), "todos": todos, "follows": follows, "problems": problems, "draining": s.Engine.Draining()}, nil
 }
 
 func (s *Server) taskDetail(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -132,7 +134,11 @@ func (s *Server) taskDetail(_ http.ResponseWriter, r *http.Request) (any, error)
 		proposals = []store.Proposal{}
 	}
 	held := s.Forge.H != nil && s.Forge.Held(r.Context(), id)
-	return map[string]any{"view": v, "runs": runs, "docs": docs, "yaml": string(yaml), "proposals": proposals, "held": held}, nil
+	week, err := s.weekOf(t)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"view": v, "runs": runs, "docs": docs, "yaml": string(yaml), "proposals": proposals, "held": held, "week": week}, nil
 }
 
 type applyBody struct {
@@ -270,12 +276,15 @@ func (s *Server) Answer(id, text string) (map[string]any, error) {
 	if _, err := s.Store.Get(id); err != nil {
 		return nil, err
 	}
-	runs, err := s.Store.Runs(id, 10)
+	runs, err := s.Store.Runs(id, dialogRunsScanned)
 	if err != nil {
 		return nil, err
 	}
 	var asked store.RunRecord
 	for _, run := range runs {
+		if isDetour(run) { // rounds run beside a stuck agent are never what the owner is answering
+			continue
+		}
 		if run.Status == store.StatusNeedsYou {
 			asked = run
 			break
