@@ -210,7 +210,8 @@ button, input, textarea { font: inherit; color: inherit; }
 .headline .live { color: var(--live); }
 .run-model { margin: 4px 0 0; font: 500 var(--text-sm) var(--font-body); color: var(--muted, inherit); opacity: .8; }
 .run-job { margin: 4px 0 0; font: 600 var(--text-sm) var(--font-body); color: var(--live); }
-.chip.proposal { border-color: rgba(255, 181, 71, .45); color: var(--warn); background: rgba(255, 181, 71, .08); }
+/* A runbook change waits for approval: a small amber dot after the name, the count in its tooltip. */
+.proposal-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 3px rgba(255, 181, 71, .16); align-self: center; }
 .chip.resident { border-color: rgba(124, 199, 255, .4); color: var(--live); background: rgba(124,199,255,.06); }
 .task-last {
   margin: 6px 0 0; font-size: var(--text-sm); line-height: 1.55; color: var(--ink-2);
@@ -256,13 +257,14 @@ button, input, textarea { font: inherit; color: inherit; }
 .follow.is-due .follow-meta { color: var(--warn); }
 .follow-checking { display: none; color: var(--ok); }
 .follow.is-checking .follow-checking { display: inline; }
-.follow-actions { grid-column: 2; grid-row: 1 / span 2; display: inline-flex; gap: 4px; }
+.follow-actions { grid-column: 2; grid-row: 1 / span 2; display: inline-flex; align-items: center; gap: 2px; }
 .follow-btn {
-  width: 22px; height: 22px; padding: 0; border-radius: var(--radius-s); cursor: pointer; line-height: 1;
-  background: transparent; border: 1px solid transparent; color: var(--muted); font-size: var(--text-sm);
+  display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border-radius: 999px; cursor: pointer;
+  background: transparent; border: 1px solid transparent; color: var(--muted);
+  transition: color var(--fast), background var(--fast), border-color var(--fast);
 }
-.follow-btn:hover, .follow-btn:focus-visible { color: var(--ink); border-color: var(--line-strong); background: rgba(255,255,255,.04); }
-.follow-check:hover, .follow-check:focus-visible { color: var(--ok); }
+.follow-btn:hover, .follow-btn:focus-visible { color: var(--ink); background: rgba(255, 255, 255, .06); border-color: var(--line); outline: none; }
+.follow-check:hover, .follow-check:focus-visible { color: var(--ok); background: rgba(94, 242, 184, .1); border-color: rgba(94, 242, 184, .3); }
 .follow-btn:disabled, .follow.is-checking .follow-check { opacity: .4; cursor: default; pointer-events: none; }
 .option {
   padding: 7px 12px; border-radius: var(--radius-s); cursor: pointer; text-align: left;
@@ -329,9 +331,8 @@ dialog.confirm p { margin: 8px 0 0; color: var(--ink-2); font-size: var(--text-s
 .d-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .d-head h2 { margin: 0; font: 900 var(--text-xl)/1.2 var(--font-display); }
 .d-meta { margin: 6px 0 0; color: var(--muted); font: 500 var(--text-xs) var(--font-mono); letter-spacing: .04em; }
-.d-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 22px; }
-.close { border: 0; background: none; color: var(--muted); font-size: 1.4rem; cursor: pointer; line-height: 1; padding: 4px 8px; }
-.close:hover { color: var(--ink); }
+.d-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 18px 0 22px; }
+.d-reserved { margin-left: 6px; font: 500 var(--text-xs) var(--font-mono); color: var(--muted); }
 .note { margin: 0 0 16px; padding: 10px 12px; border-radius: var(--radius-s); background: rgba(124,199,255,.07); border: 1px solid rgba(124,199,255,.25); font-size: var(--text-sm); }
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 18px; overflow-x: auto; }
 .tab {
@@ -524,7 +525,14 @@ a.ext:hover { text-decoration-color: var(--live); }
   .coach-ring, .coach-card { transition: none; }
   .coach-ring::after, .coach-card.in { animation: none; }
 }
-.d-head-tools { display: flex; align-items: center; gap: 6px; }
+/* The task page's ? and ×: one size, one outline, icons centred; aligned with the title's first line. */
+.d-head-tools { display: flex; align-items: center; gap: 8px; padding-top: 6px; flex: none; }
+.head-btn {
+  display: inline-grid; place-items: center; width: 34px; height: 34px; padding: 0; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line-strong); background: transparent; color: var(--muted);
+  transition: color var(--fast), border-color var(--fast), background var(--fast);
+}
+.head-btn:hover, .head-btn:focus-visible { color: var(--ink); border-color: var(--ink-2); background: rgba(255, 255, 255, .05); outline: none; }
 
 /* Task list layouts (Settings → Task list). "groups" keeps full cards for what needs a look. */
 .tasks-sect { list-style: none; margin: 8px 0 -2px; font: 600 var(--text-xs) var(--font-mono); letter-spacing: .2em; color: var(--muted); }
@@ -599,8 +607,8 @@ a.ext:hover { text-decoration-color: var(--live); }
 .settings-choice span:not(.sketch) { font-size: var(--text-xs); line-height: 1.45; color: var(--muted); }
 .settings-choice:hover, .settings-choice:focus-visible { border-color: var(--line-strong); background: rgba(255, 255, 255, .04); outline: none; }
 .settings-choice[aria-checked="true"] { border-color: var(--ok); background: rgba(94, 242, 184, .07); }
-.settings-row { display: flex; align-items: center; gap: 12px; }
-.settings-hint { flex: 1; margin: 0; font-size: var(--text-xs); line-height: 1.55; color: var(--muted); }
+.settings-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.settings-hint { flex: 1 1 220px; margin: 0; font-size: var(--text-xs); line-height: 1.55; color: var(--muted); }
 
 /* Move & health check (settings) */
 .settings-row .btn { flex: none; }
@@ -673,3 +681,48 @@ a.ext:hover { text-decoration-color: var(--live); }
 .replay-row dt { color: var(--muted); font-size: var(--text-xs); }
 .replay-row dd { margin: 0; overflow-wrap: anywhere; }
 .replay-tags { margin: 6px 0 0; font-size: var(--text-xs); color: var(--muted); }
+
+/* Memory tab: the rules' size against their cap, then the knowledge base by topic. */
+.mem-size { margin: 0 0 8px; font: 500 var(--text-xs) var(--font-mono); color: var(--muted); }
+.mem-size.over { color: var(--warn); }
+.knowledge { margin-top: 22px; display: grid; gap: 6px; }
+.knowledge h3 { margin: 0; font-size: var(--text-sm); color: var(--ink-2); }
+.knowledge > .d-meta { margin: 0 0 4px; }
+.knowledge-topic { border: 1px solid var(--line); border-radius: var(--radius-s); background: rgba(255, 255, 255, .02); }
+.knowledge-topic summary { display: flex; align-items: baseline; gap: 10px; padding: 7px 10px; cursor: pointer; }
+.knowledge-topic summary b { font: 600 var(--text-sm) var(--font-mono); }
+.knowledge-topic[open] summary { border-bottom: 1px solid var(--line); }
+.knowledge-body { list-style: none; margin: 0; padding: 8px 10px; display: grid; gap: 6px; max-height: 420px; overflow: auto; font-size: var(--text-sm); }
+.knowledge-body li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; overflow-wrap: anywhere; }
+.knowledge-body time { font: 500 var(--text-xs) var(--font-mono); color: var(--muted); padding-top: 2px; }
+.knowledge-body li > span:only-child { grid-column: 1 / -1; }
+
+/* Task page: the north star, a week of to-dos (grey) and the ones that took the owner's own words (amber). */
+.autonomy { margin: 6px 0 0; display: grid; gap: 4px; }
+.autonomy p { margin: 0; }
+.autonomy b { color: var(--warn); font-weight: 600; }
+.auto-bars { display: flex; align-items: flex-end; gap: 6px; height: 44px; }
+.auto-day { display: grid; justify-items: center; align-content: end; gap: 2px; width: 26px; }
+.auto-day span { font: 500 10px var(--font-mono); color: var(--muted); }
+.auto-bar { position: relative; width: 14px; min-height: 2px; border-radius: 3px 3px 0 0; background: var(--line-strong); }
+.auto-bar i { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 3px 3px 0 0; background: var(--warn); }
+
+/* Evolution tab: what self-evolution changed in this task, newest first. */
+.evolution > .d-meta { margin: 0 0 12px; }
+.evo-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.evo-item { padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-s); background: rgba(255, 255, 255, .02); display: grid; gap: 4px; }
+.evo-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; font: 500 var(--text-xs) var(--font-mono); color: var(--muted); }
+.evo-target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.evo-status { flex: none; padding: 1px 7px; border-radius: 99px; border: 1px solid currentColor; font-size: 10px; letter-spacing: .06em; }
+.evo-status.live { color: var(--live); }
+.evo-status.ok { color: var(--ok); }
+.evo-status.bad { color: var(--bad); }
+.evo-status.skip { color: var(--muted); }
+.evo-change { margin: 0; font-size: var(--text-sm); overflow-wrap: anywhere; }
+.evo-line { margin: 0; font-size: var(--text-xs); color: var(--muted); overflow-wrap: anywhere; }
+.evo-measure { color: var(--warn); }
+.evo-why summary { cursor: pointer; font-size: var(--text-xs); color: var(--muted); }
+.evo-why p { margin: 4px 0 0; font-size: var(--text-xs); color: var(--ink-2); overflow-wrap: anywhere; }
+.evo-rounds { margin-bottom: 16px; }
+.evolution h3 { margin: 0 0 8px; font-size: var(--text-sm); color: var(--ink-2); }
+.evo-status.warn { color: var(--warn); }

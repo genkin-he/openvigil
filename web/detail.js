@@ -1,5 +1,5 @@
 // Task drawer: actions, runs timeline, docs and config.
-import { h, api, toast, statusLabel, triggerText, hm, mdhm, relative, richText } from "./util.js";
+import { h, api, toast, statusLabel, statusCls, triggerText, hm, mdhm, relative, richText, icon } from "./util.js";
 import { t } from "./i18n.js";
 import { confirmDialog } from "./confirm.js";
 import { startTabsTour } from "./tour.js";
@@ -106,6 +106,41 @@ function weekLine(week) {
   return h("p", { class: "d-meta d-week", text });
 }
 
+const AUTONOMY_DAYS = 7;
+const AUTONOMY_BAR_PX = 28;
+const AUTONOMY_TOP_KINDS = 3;
+
+/**
+ * The north star: how often the owner still had to step in on this task's to-dos, per day for a week.
+ * Grey is all to-dos, amber the ones that took the owner's own words (typed, edited, answered elsewhere).
+ */
+function autonomyBlock(a) {
+  if (!a || !a.days || !a.days.length) return null;
+  const byDate = new Map(a.days.map((d) => [d.date, d]));
+  const dates = Array.from({ length: AUTONOMY_DAYS }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (AUTONOMY_DAYS - 1 - i));
+    return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  });
+  const sum = (key) => a.days.reduce((n, d) => n + (d[key] || 0), 0);
+  const peak = Math.max(1, ...a.days.map((d) => d.total));
+  const bars = dates.map((date) => {
+    const d = byDate.get(date) || { total: 0, effort: 0 };
+    const px = (n) => `${Math.round((n / peak) * AUTONOMY_BAR_PX)}px`;
+    const tip = d.total ? t("auto.dayTip", { date, total: d.total, effort: d.effort, typed: d.typed, edited: d.edited,
+      elsewhere: d.elsewhere, picked: d.picked, asis: d.as_is }) : t("auto.dayNone", { date });
+    return h("div", { class: "auto-day", title: tip, "aria-label": tip },
+      h("div", { class: "auto-bar", style: `height:${px(d.total)}` }, h("i", { style: `height:${px(d.effort)}` })),
+      h("span", { text: date.slice(3) }));
+  });
+  const kinds = a.kinds.filter((k) => k.effort > 0).slice(0, AUTONOMY_TOP_KINDS);
+  return h("section", { class: "autonomy", title: t("auto.help") },
+    h("p", { class: "d-meta" }, h("b", { text: t("auto.title") }),
+      t("auto.sum", { effort: sum("effort"), total: sum("total"), picked: sum("picked"), asis: sum("as_is") })),
+    h("div", { class: "auto-bars", role: "img", "aria-label": t("auto.aria") }, ...bars),
+    kinds.length ? h("p", { class: "d-meta", text: t("auto.kinds", { list: kinds.map((k) => `${k.kind || "—"} ${k.effort}`).join(" · ") }) }) : null);
+}
+
 function draw() {
   const { view, held } = current.data;
   const task = view.task;
@@ -117,10 +152,12 @@ function draw() {
         h("h2", { id: "d-title", text: task.name }),
         h("p", { class: "d-meta", text: [task.id, mode, triggerText(task), next, t("detail.runCount", { n: view.state.run_count })].join(" · ") })),
       h("div", { class: "d-head-tools" },
-        h("button", { class: "lang", id: "d-tour", type: "button", text: t("tour.btn"), title: t("tour.tabsTitle"), "aria-label": t("tour.tabsTitle"),
-          onclick: () => startTabsTour() }),
-        h("button", { class: "close", type: "button", "aria-label": t("detail.close"), text: "×", onclick: () => { location.hash = ""; } }))),
+        h("button", { class: "head-btn", id: "d-tour", type: "button", title: t("tour.tabsTitle"), "aria-label": t("tour.tabsTitle"),
+          onclick: () => startTabsTour() }, icon("help", 18)),
+        h("button", { class: "head-btn", type: "button", title: t("detail.close"), "aria-label": t("detail.close"),
+          onclick: () => { location.hash = ""; } }, icon("close", 18)))),
     weekLine(current.data.week),
+    autonomyBlock(current.data.autonomy),
     held ? h("p", { class: "note", text: t("detail.held") }) : null,
     view.needs_you ? needsBlock(task.id, view.needs_you) : null,
     view.answered ? h("p", { class: "answered", text: t("detail.answeredQ", { q: view.answered.question, a: view.answered.answer }) }) : null,
@@ -163,7 +200,7 @@ function actions(task, view) {
       : h("button", { class: "btn", type: "button", text: t("act.resume"), onclick: () => act(t("act.resumed"), () => api("POST", `/api/tasks/${id}/resume`)) }),
     h("button", { class: "btn", type: "button", text: t("act.open"), title: t("act.openTitle"),
       onclick: (e) => act(t("act.opened"), () => api("POST", `/api/tasks/${id}/open`), e.currentTarget, t("act.opening")) }),
-    h("button", { class: "btn danger", type: "button", text: t("act.delete"),
+    view.reserved ? h("span", { class: "d-reserved", text: t("act.reserved") }) : h("button", { class: "btn danger", type: "button", text: t("act.delete"),
       onclick: async () => {
         const yes = await confirmDialog({ title: t("act.deleteTitle", { name: task.name }), body: t("act.deleteBody"),
           confirmText: t("act.delete"), danger: true });
@@ -172,7 +209,7 @@ function actions(task, view) {
 }
 
 const TABS = [
-  "runs", "brief", "runbook", "memory", "config",
+  "runs", "brief", "runbook", "memory", "evolve", "config",
 ];
 
 function tabs(view) {
@@ -186,7 +223,8 @@ function panel() {
   switch (current.tab) {
     case "brief": return docEditor("brief", t("doc.brief"));
     case "runbook": return h("div", {}, ...current.data.proposals.map(proposal), docEditor("runbook", t("doc.runbook")));
-    case "memory": return docEditor("memory", t("doc.memory"));
+    case "memory": return memoryPanel();
+    case "evolve": return evolutionPanel();
     case "config": return configEditor();
     default: return timeline();
   }
@@ -246,6 +284,98 @@ function docEditor(doc, hint) {
       return out;
     }) });
   return h("div", {}, area, h("div", { class: "doc-bar" }, h("span", { text: hint }), save));
+}
+
+/** Rules (memory.md, read every round, capped) above the knowledge base (facts by topic, read on demand). */
+function memoryPanel() {
+  const m = current.data.memory || { bytes: 0, cap: 0, knowledge: [] };
+  const over = m.cap > 0 && m.bytes > m.cap;
+  return h("div", {},
+    h("p", { class: `mem-size${over ? " over" : ""}`, text: t(over ? "memory.over" : "memory.size", { size: kb(m.bytes), cap: kb(m.cap) }) }),
+    docEditor("memory", t("doc.memory")),
+    knowledgeSection(m.knowledge || []));
+}
+
+/** What self-evolution has changed in this task, newest first, with each change's verdict or review date. */
+function evolutionPanel() {
+  const ev = current.data.evolution || { policy: "", counts: {}, changes: [] };
+  const n = (status) => ev.counts[status] || 0;
+  const total = Object.values(ev.counts).reduce((a, b) => a + b, 0);
+  return h("div", { class: "evolution" },
+    h("p", { class: "d-meta" }, t(`evo.policy.${ev.policy}`), " · ",
+      total ? t("evo.counts", { total, watching: n("watching"), kept: n("kept"), reverted: n("reverted") }) : t("evo.none")),
+    (ev.rounds || []).length ? h("section", { class: "evo-rounds" },
+      h("h3", { text: t("evo.rounds", { n: ev.rounds.length }) }),
+      h("ol", { class: "evo-list" }, ...ev.rounds.map(roundItem))) : null,
+    ev.changes.length ? h("h3", { class: "evo-sub", text: t("evo.changes") }) : null,
+    ev.changes.length ? h("ol", { class: "evo-list" }, ...ev.changes.map(evolutionItem)) : null);
+}
+
+/** One self-evolution round about this task: when, how it ended, what it cost and what it did. */
+function roundItem(r) {
+  return h("li", { class: "evo-item" },
+    h("div", { class: "evo-head" },
+      h("time", { text: mdhm(new Date(r.started_at)) }),
+      h("span", { class: `evo-status ${statusCls(r.status)}`, text: statusLabel(r.status) }),
+      r.cost_usd ? h("span", { text: "$" + r.cost_usd.toFixed(2) }) : null),
+    h("p", { class: "evo-change" }, ...richText(r.summary || "")));
+}
+
+function evolutionItem(c) {
+  const status = c.status in EVO_TONE ? c.status : "watching";
+  const since = c.since && c.since.total ? t("evo.measure", { kind: c.metric.split("/").pop(),
+    before: c.baseline ? `${c.baseline.effort}/${c.baseline.total}` : "—", after: `${c.since.effort}/${c.since.total}` }) : null;
+  const tail = status === "watching" ? t("evo.review", { date: mdhm(new Date(c.review_at)) }) : c.verdict ? t("evo.verdict", { text: c.verdict }) : null;
+  return h("li", { class: "evo-item" },
+    h("div", { class: "evo-head" },
+      h("time", { text: mdhm(new Date(c.at)) }),
+      h("span", { class: `evo-status ${EVO_TONE[status]}`, text: t(`evo.status.${status}`) }),
+      h("span", { class: "evo-target", text: c.target })),
+    h("p", { class: "evo-change" }, ...richText(c.change)),
+    h("p", { class: "evo-line", text: t("evo.expect", { text: c.expect }) }),
+    since ? h("p", { class: "evo-line evo-measure", text: since }) : null,
+    tail ? h("p", { class: "evo-line" }, ...richText(tail)) : null,
+    c.why ? h("details", { class: "evo-why" }, h("summary", { text: t("evo.why") }), h("p", {}, ...richText(c.why))) : null);
+}
+
+const EVO_TONE = { watching: "live", kept: "ok", reverted: "bad", rejected_by_replay: "skip" };
+
+const kb = (bytes) => `${(bytes / 1024).toFixed(1)} KB`;
+
+function knowledgeSection(topics) {
+  const entries = topics.reduce((n, k) => n + k.entries, 0);
+  return h("section", { class: "knowledge" },
+    h("h3", { text: t("knowledge.title", { n: topics.length, entries }) }),
+    h("p", { class: "d-meta", text: t(topics.length ? "knowledge.hint" : "knowledge.empty") }),
+    ...topics.map(topicItem));
+}
+
+function topicItem(k) {
+  const body = h("ol", { class: "knowledge-body" }, h("li", { class: "d-meta", text: t("knowledge.loading") }));
+  const item = h("details", { class: "knowledge-topic" },
+    h("summary", {}, h("b", { text: k.topic }), h("span", { class: "d-meta", text: t("knowledge.meta", { n: k.entries, size: kb(k.bytes) }) })),
+    body);
+  let loaded = false;
+  item.addEventListener("toggle", async () => {
+    if (!item.open || loaded) return;
+    loaded = true;
+    try {
+      const out = await api("GET", `/api/tasks/${encodeURIComponent(current.id)}/knowledge/${encodeURIComponent(k.topic)}`);
+      body.replaceChildren(...knowledgeLines(out.content));
+    } catch (err) {
+      loaded = false;
+      body.replaceChildren(h("li", { class: "d-meta", text: err.message }));
+    }
+  });
+  return item;
+}
+
+/** "- 2026-11-19 fact" lines as dated list items; links in a fact stay clickable. */
+function knowledgeLines(content) {
+  return content.split("\n").filter((line) => line.startsWith("- ")).map((line) => {
+    const m = line.match(/^- (\d{4}-\d{2}-\d{2})\s+(.*)$/);
+    return h("li", {}, m ? h("time", { text: m[1].slice(5) }) : null, h("span", {}, ...richText(m ? m[2] : line.slice(2))));
+  });
 }
 
 function configEditor() {

@@ -176,9 +176,13 @@ func TestPauseResumeDocsAnswerAndRemove(t *testing.T) {
 	if !strings.Contains(focusRec.Body.String(), runs[0].ID) {
 		t.Fatalf("detail with run focus: %s", focusRec.Body)
 	}
-	do(h, "POST", "/api/tasks/d/memory", `{"text":"记住这个"}`, true)
-	if mem, _ := s.Store.ReadDoc("d", store.DocMemory); !strings.Contains(mem, "记住这个") {
+	do(h, "POST", "/api/tasks/d/memory", `{"text":"纠错：记住这个"}`, true)
+	if mem, _ := s.Store.ReadDoc("d", store.DocMemory); !strings.Contains(mem, "纠错：记住这个") {
 		t.Fatalf("memory = %q", mem)
+	}
+	do(h, "POST", "/api/tasks/d/memory", `{"text":"[demo-db] 订单表叫 orders"}`, true)
+	if topics, _ := s.Store.Knowledge("d"); len(topics) != 1 || topics[0].Topic != "demo-db" {
+		t.Fatalf("a tagged fact did not go to knowledge: %+v", topics)
 	}
 	if rec, _ := do(h, "DELETE", "/api/tasks/d", "", true); rec.Code != http.StatusOK {
 		t.Fatalf("delete: %d", rec.Code)
@@ -422,5 +426,34 @@ func TestForgeStagesAndClose(t *testing.T) {
 	}
 	if rec, _ := do(h, "GET", "/api/forge/..%2Fx/status", "", true); rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad name accepted: %d", rec.Code)
+	}
+}
+
+func TestTaskDetailShowsMemorySizeAndKnowledge(t *testing.T) {
+	s, h := newServer(t)
+	do(h, "POST", "/api/tasks", applyJSON("id: d\nname: D\ntrigger: {kind: manual}\n"), true)
+	_ = s.Store.AppendMemory("d", []string{"纠错：先查再答", "[monitor] 查日志要带集群", "[monitor] 没有 --since"}, s.Now())
+
+	_, env := do(h, "GET", "/api/tasks/d", "", true)
+	detail := decodeData[struct {
+		Memory struct {
+			Bytes     int                    `json:"bytes"`
+			Cap       int                    `json:"cap"`
+			Knowledge []store.KnowledgeTopic `json:"knowledge"`
+		} `json:"memory"`
+	}](t, env.Data)
+	m := detail.Memory
+	if m.Bytes == 0 || m.Cap != store.MemoryCap || len(m.Knowledge) != 1 || m.Knowledge[0].Topic != "monitor" || m.Knowledge[0].Entries != 2 {
+		t.Fatalf("memory = %+v", m)
+	}
+
+	_, env = do(h, "GET", "/api/tasks/d/knowledge/monitor", "", true)
+	if got := decodeData[map[string]string](t, env.Data); !strings.Contains(got["content"], "没有 --since") {
+		t.Fatalf("topic = %+v", got)
+	}
+	for _, bad := range []string{"nope", "..%2Fmemory", "Monitor"} {
+		if rec, _ := do(h, "GET", "/api/tasks/d/knowledge/"+bad, "", true); rec.Code == 200 {
+			t.Errorf("topic %q served", bad)
+		}
 	}
 }

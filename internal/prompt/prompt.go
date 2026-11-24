@@ -23,7 +23,18 @@ type Context struct {
 	VigilBin    string   // absolute path of the vigil binary (resident mode reports through it)
 	Job         string   // set for a background job: what the main run handed off
 	OwnerDoc    string   // the owner's principles shared by all tasks (path; "" when there are none)
+	Knowledge   []Topic  // the task's knowledge files, read when a run needs that topic
 }
+
+// Topic is one knowledge file: knowledge/<Name>.md with Entries facts.
+type Topic struct {
+	Name    string
+	Entries int
+	Bytes   int64
+}
+
+// smallKnowledge is a knowledge base small enough to read whole every round.
+const smallKnowledge = 8 * 1024
 
 // Build renders the run prompt.
 func Build(c Context) string {
@@ -38,6 +49,7 @@ func Build(c Context) string {
 	fmt.Fprintf(&b, "1. 先读：%s/brief.md（需求，最高优先级）、%s/runbook.md（做法，可能为空）、%s/memory.md（长期记忆，可能为空）。\n", c.Dir, c.Dir, c.Dir)
 	b.WriteString("   memory.md 里以「决策：」开头的是我之前对同类问题的决定，遇到同类问题直接照办，不要再问我。\n")
 	fmt.Fprintf(&b, "   几天前的事务流水已挪到 %s/memory.archive.md（可能没有），遇到相关的人、线程、服务时先 grep 它。\n", c.Dir)
+	b.WriteString(knowledgeIndex(c))
 	if c.OwnerDoc != "" {
 		fmt.Fprintf(&b, "   还要读 %s：我的判断原则，所有任务共用，从我自己的纠错、回复和决定里提炼出来；代我判断、措辞时照它办。和本任务 brief 冲突时以 brief 为准。\n", c.OwnerDoc)
 	}
@@ -70,7 +82,7 @@ func Build(c Context) string {
 const reportQuoteGuide = "汇报命令本身也要过权限规则：summary、memory 里提到命令时用文字描述（比如「生产环境的 list 命令」），不要原样抄命令行参数，否则可能命中确认规则，让汇报卡在确认框上。\n"
 
 func reportSpec(c Context) string {
-	schema := `{"status": "ok | needs_you | fail", "summary": "一两句话：做了什么、结果如何（中文）", "question": "needs_you 时：要我决定什么，一句话", "options": ["A: 推荐做法 — 后果", "B: …"], "recommendation": "A", "made": ["这一轮新产出的东西，一项一条带链接：提的 MR、发的评论、建的工单…（可选；代回 Slack 不用列，Vigil 自己会数）"], "memory": ["下次遇到同类事还用得上的规则或事实（可选）；某条线程的进展、已回复谁、在等谁这类流水不要写，跟进用 vigil follow、要我办的用 vigil todo"]}`
+	schema := `{"status": "ok | needs_you | fail", "summary": "一两句话：做了什么、结果如何（中文）", "question": "needs_you 时：要我决定什么，一句话", "options": ["A: 推荐做法 — 后果", "B: …"], "recommendation": "A", "made": ["这一轮新产出的东西，一项一条带链接：提的 MR、发的评论、建的工单…（可选；代回 Slack 不用列，Vigil 自己会数）"], "memory": ["下次遇到同类事还用得上的规则或事实（可选）。规则以「决策：」「纠错：」「教训：」开头，进 memory.md 每轮都读；事实（表在哪、命令怎么写、某服务为什么这样）开头写 [主题]，主题用服务或工具名，例如 [social-service] …，进知识库按需读。某条线程的进展、已回复谁、在等谁这类流水不要写，跟进用 vigil follow、要我办的用 vigil todo"]}`
 	links := "\nsummary、question、options 里提到的工单、MR、需求/缺陷、发布单、Slack 消息、文档等，只要有网页地址，一律写成 [名称](完整 https 链接)，例如 [工单 #331](https://…/issues/331)、[!175](https://…/merge_requests/175)；不要只写编号或路径。拿不到地址的才只写编号。\n"
 	tail := links + todoGuide(c) + followGuide(c) + spawnGuide(c) + "\n如果发现 runbook 可以写得更好（更快、更稳），在汇报前执行：" + bin(c) + " amend " + c.Task.ID + " -f <新 runbook 文件> --reason \"原因\"\n"
 	if c.Task.Mode == task.ModeResident {
@@ -101,9 +113,11 @@ func followGuide(c Context) string {
 // todoGuide tells the agent how to hand the owner a decision about one concrete matter.
 func todoGuide(c Context) string {
 	return "\n要我拍板或确认回复的具体事项（某条 Slack 消息、某个缺陷 / MR / 工单），写进 Vigil 待办，我会在 Vigil 控制台回答，回答会作为新一轮输入交回本任务：\n" +
-		bin(c) + " todo add --task " + c.Task.ID + " --title \"<人>：<一句话>\" --kind \"<事情的类别>\" --detail \"<频道 / 背景>\" --link \"<网页或 slack:// 深链>\" --ref \"<来源唯一键，如 <channel>:<ts>[:<thread_ts>]>\" --target \"<回复发到哪，如 slack:<channel>:<thread_ts> 或 issue:<链接>>\" --analysis \"<查了什么、结论和依据、要我定什么；多行用 - 从 stdin 读>\" --reply \"<可以直接发出去的建议回复；拿不准或要我拍板的不带>\" --shadow \"<不带 --reply 时写：要是让你直接回，你会怎么回。不会发出去，只用来和我实际的回复对比，看哪类事可以放手给你>\"\n" +
+		bin(c) + " todo add --task " + c.Task.ID + " --title \"<人>：<一句话>\" --kind \"<事情的类别>\" --detail \"<频道 / 背景>\" --link \"<网页或 slack:// 深链>\" --ref \"<来源唯一键，如 <channel>:<ts>[:<thread_ts>]>\" --target \"<回复发到哪，如 slack:<channel>:<thread_ts> 或 issue:<链接>>\" --analysis \"<查了什么、结论和依据、要我定什么；多行用 - 从 stdin 读>\" --reply \"<可以直接发出去的建议回复；什么时候带以 brief 为准，brief 没写的，拿不准或要我拍板的不带>\" --shadow \"<不带 --reply 时写：要是让你直接回，你会怎么回。不会发出去，只用来和我实际的回复对比，看哪类事可以放手给你>\"\n" +
 		"--kind 是稳定的短类别（2～6 个字，同类事每次用同一个词，例如「问进度」「问数据」「要审批」「缺陷确认」「要排期」），Vigil 按类别学习我的处理习惯，所以别每次换说法；先用 " + bin(c) + " todo kinds " + c.Task.ID + " 看已有的类别，能归进去就用已有的。\n" +
-		"要我在几个明确做法里选一个的（审批：批这一次 / 不批 / 以后都自动批；要不要做某事；几种方案），加 --choice，每个选项一个：--choice \"<按钮>|<后果>\"，按钮不超过 30 字、2～5 个，后果写清选它会发生什么。我点了哪个，你会收到「我选了「<按钮>」（<后果>）」；我也可能不点按钮、直接写意见。开放问题（要我给数据、写措辞）不要硬凑选项。\n" +
+		"要我在几个明确做法里选一个的（审批：批这一次 / 不批 / 以后都自动批；要不要做某事；几种方案），加 --choice，每个选项一个：--choice \"<按钮>|<后果>\"，按钮不超过 30 字、2～5 个，后果写清选它会发生什么。每个选项都是完整动作：我点了它，你不用再问就能做完、能直接回复对方（后果里写好要回的那句话）。" + principleCheck(c) + "需要产品判断的，给一项「转产品定」，写清找谁、问什么。" +
+		"建要我拍板的待办之前，先把我拍板要用、你自己查得到的事实查完写进 --analysis：涉及的接口 / 字段 / 配置现在有没有、之前有没有做过 / 修过、相关人在线程或工单里的最新回复、这事是谁提的谁负责（翻聊天记录和代码）；只有别人才知道的，写清该问谁、问什么，并给一项「先问 X 再定」。不要把「先查一下」留给我。我点了哪个，你会收到「我选了「<按钮>」（<后果>）」；我也可能不点按钮、直接写意见。开放问题（要我给数据、写措辞）不要硬凑选项。\n" +
+		"我还没答的待办，如果事情有了进展、别人先拍板了（对方或对方上级定了方案、改了要求）：新决定和待办里给我的选项或拟稿完全一致的，才可以 todo done 结掉并在 --outcome 写明谁定了什么；和待办里给我的选项或拟稿不完全一样的，不要结掉——我可能正要反对。用 " + bin(c) + " todo note <id> --analysis \"<谁在什么时候定了什么，和原选项差在哪>\" 补在原待办上，让我来定；同一件事不要另开一条新待办。\n" +
 		"同一 --ref 会更新已有待办，不会重复建；写之前可以用 " + bin(c) + " todo list 看已有的。写过待办的事，本轮结果标 ok，summary 写「已建待办 td-xxx」，不要再标 needs_you；needs_you 只留给不能落到具体事项、又要我决定的事（例如任务规则要不要改）。\n"
 }
 
@@ -129,4 +143,29 @@ func handsGuide(c Context) string {
 		"- 每做一步界面操作都截屏确认结果，确认不了就停下回报 needs_you，不要盲点。\n" +
 		"- 发送、提交、删除、付款、下单这类不可撤销的动作，除非 brief 明确授权，否则停在最后一步，回报 needs_you，写清楚要我确认什么。\n" +
 		"- 摸索出能稳定复用的流程，就写成脚本放进 " + c.Dir + "/scripts/，并用 amend 把 runbook 改成直接调用脚本，下次不用再摸索界面。\n"
+}
+
+// knowledgeIndex lists the task's knowledge files so a run reads the one it needs, not all of them.
+func knowledgeIndex(c Context) string {
+	if len(c.Knowledge) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(c.Knowledge))
+	var total int64
+	for _, k := range c.Knowledge {
+		parts = append(parts, fmt.Sprintf("%s.md（%d 条）", k.Name, k.Entries))
+		total += k.Bytes
+	}
+	if total <= smallKnowledge {
+		return fmt.Sprintf("   知识库 %s/knowledge/ 放着查到过的事实：%s。内容不多，开始前整份读一遍。\n", c.Dir, strings.Join(parts, "、"))
+	}
+	return fmt.Sprintf("   知识库 %s/knowledge/ 不用每轮读，按主题放着查到过的事实：%s。碰到相关的服务、工具、库表时，先读对应文件再动手。\n", c.Dir, strings.Join(parts, "、"))
+}
+
+// principleCheck asks for choices that keep to the owner's principles, when there is a principles file.
+func principleCheck(c Context) string {
+	if c.OwnerDoc == "" {
+		return ""
+	}
+	return "选项先过一遍我的判断原则（" + c.OwnerDoc + "），违背已定原则的不要列出来（例如定过两个环境要同步改的，就不给「只改一个」）；"
 }

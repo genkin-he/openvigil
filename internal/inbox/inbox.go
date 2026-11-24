@@ -41,28 +41,31 @@ var idPattern = regexp.MustCompile(`^td-[0-9a-f]{6}$`)
 
 // Item is one to-do.
 type Item struct {
-	ID       string    `json:"id"`
-	TaskID   string    `json:"task_id"`            // the task that carries out the owner's answer
-	Title    string    `json:"title"`              // who and what, one line
-	Detail   string    `json:"detail,omitempty"`   // channel / background
-	Analysis string    `json:"analysis,omitempty"` // what was checked, the conclusion, what the owner must decide
-	Reply    string    `json:"reply,omitempty"`    // a drafted reply the owner can send as is
-	Shadow   string    `json:"shadow,omitempty"`   // with no Reply: what the agent would have sent; never offered for sending, only compared with what the owner wrote
-	Link     string    `json:"link,omitempty"`     // where the matter lives (Slack deep link, issue, MR …)
-	Ref      string    `json:"ref,omitempty"`      // stable key of the source, e.g. <channel>:<ts>[:<thread_ts>]; dedupes items
-	Target   string    `json:"target,omitempty"`   // where a reply goes, e.g. slack:<channel>:<thread_ts> or an issue URL
-	Owner    bool      `json:"owner,omitempty"`    // only the owner can take this step (e.g. loosen an agent's permissions); Reply says how
-	RunID    string    `json:"run_id,omitempty"`   // the run that raised it, for replaying that round later
-	Reopens  int       `json:"reopens,omitempty"`  // times the task handed the owner's answer back undone
-	Status   string    `json:"status"`
-	Answer   string    `json:"answer,omitempty"` // what the owner decided
-	Outcome  string    `json:"outcome,omitempty"`
-	Kind     string    `json:"kind,omitempty"`     // a short, stable category the raising task gives, e.g.「问进度」; decisions are learned per kind
-	Choices  []Choice  `json:"choices,omitempty"`  // fixed answers the owner picks from (buttons); free text stays possible
-	Decision string    `json:"decision,omitempty"` // how the owner settled it: as_is, edited, instructed, dismissed
-	SlackTS  string    `json:"slack_ts,omitempty"` // the copy posted to the owner's self-DM; replies in its thread answer the item
-	Created  time.Time `json:"created_at"`
-	Updated  time.Time `json:"updated_at"`
+	ID       string `json:"id"`
+	TaskID   string `json:"task_id"`            // the task that carries out the owner's answer
+	Title    string `json:"title"`              // who and what, one line
+	Detail   string `json:"detail,omitempty"`   // channel / background
+	Analysis string `json:"analysis,omitempty"` // what was checked, the conclusion, what the owner must decide
+	Reply    string `json:"reply,omitempty"`    // a drafted reply the owner can send as is
+	Shadow   string `json:"shadow,omitempty"`   // with no Reply: what the agent would have sent; never offered for sending, only compared with what the owner wrote
+	Link     string `json:"link,omitempty"`     // where the matter lives (Slack deep link, issue, MR …)
+	Ref      string `json:"ref,omitempty"`      // stable key of the source, e.g. <channel>:<ts>[:<thread_ts>]; dedupes items
+	Target   string `json:"target,omitempty"`   // where a reply goes, e.g. slack:<channel>:<thread_ts> or an issue URL
+	Owner    bool   `json:"owner,omitempty"`    // only the owner can take this step (e.g. loosen an agent's permissions); Reply says how
+	RunID    string `json:"run_id,omitempty"`   // the run that raised it, for replaying that round later
+	Reopens  int    `json:"reopens,omitempty"`  // times the task handed the owner's answer back undone
+	Status   string `json:"status"`
+	Answer   string `json:"answer,omitempty"` // what the owner decided
+	Outcome  string `json:"outcome,omitempty"`
+	// TaskClosed marks an item its own task closed (the other side decided, the matter moved on) rather
+	// than the owner: the owner may still answer it, and their answer wins.
+	TaskClosed bool      `json:"task_closed,omitempty"`
+	Kind       string    `json:"kind,omitempty"`     // a short, stable category the raising task gives, e.g.「问进度」; decisions are learned per kind
+	Choices    []Choice  `json:"choices,omitempty"`  // fixed answers the owner picks from (buttons); free text stays possible
+	Decision   string    `json:"decision,omitempty"` // how the owner settled it: as_is, edited, instructed, dismissed
+	SlackTS    string    `json:"slack_ts,omitempty"` // the copy posted to the owner's self-DM; replies in its thread answer the item
+	Created    time.Time `json:"created_at"`
+	Updated    time.Time `json:"updated_at"`
 }
 
 // Choice is one fixed answer to an item: a short label (the button) and what picking it leads to.
@@ -318,10 +321,10 @@ func (b *Box) Answer(id, answer string) (Item, error) {
 		return Item{}, errors.New("回答是空的")
 	}
 	return b.update(id, func(it Item) (Item, error) {
-		if it.Status != StatusOpen {
+		if it.Status != StatusOpen && !(it.Status == StatusDone && it.TaskClosed && !it.Owner) {
 			return it, ErrClosed
 		}
-		it.Status, it.Answer = StatusAnswered, answer
+		it.Status, it.Answer, it.TaskClosed = StatusAnswered, answer, false
 		return it, nil
 	})
 }
@@ -365,6 +368,15 @@ func (b *Box) HandBack(id, analysis string) (Item, error) {
 func (b *Box) Close(id, outcome string) (Item, error) {
 	return b.update(id, func(it Item) (Item, error) {
 		it.Status, it.Outcome = StatusDone, strings.TrimSpace(outcome)
+		return it, nil
+	})
+}
+
+// CloseByTask is Close by the item's own task, not the owner: the owner can still answer it afterwards
+// (an answer they were writing when the task closed it is not thrown away).
+func (b *Box) CloseByTask(id, outcome string) (Item, error) {
+	return b.update(id, func(it Item) (Item, error) {
+		it.Status, it.Outcome, it.TaskClosed = StatusDone, strings.TrimSpace(outcome), true
 		return it, nil
 	})
 }

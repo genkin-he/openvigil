@@ -46,32 +46,40 @@ var datePrefix = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}\b`)
 // ErrNotFound is returned when a task does not exist.
 var ErrNotFound = errors.New("task not found")
 
+// StuckDialog is a dialog a detour found the resident agent stopped on, as a dialog round would record it.
+type StuckDialog struct {
+	Summary  string   `json:"summary"`
+	Question string   `json:"question,omitempty"`
+	Options  []string `json:"options,omitempty"`
+}
+
 // RunRecord is one run of a task, one JSON line in runs.jsonl.
 type RunRecord struct {
-	ID             string    `json:"id"`
-	TaskID         string    `json:"task_id"`
-	Trigger        string    `json:"trigger"`
-	Status         string    `json:"status"`
-	Summary        string    `json:"summary,omitempty"`
-	Question       string    `json:"question,omitempty"`
-	Options        []string  `json:"options,omitempty"`
-	Recommendation string    `json:"recommendation,omitempty"`
-	Dialog         bool      `json:"dialog,omitempty"`  // stopped on a dialog in the agent's session; Options answer it there
-	Detour         bool      `json:"detour,omitempty"`  // ran in a fresh session because the resident agent was stuck on a dialog
-	Denied         []string  `json:"denied,omitempty"`  // allow rules for operations the permission rules refused
-	Refused        []string  `json:"refused,omitempty"` // operations the auto mode classifier refused ("tool：reason")
-	Structured     bool      `json:"structured"`
-	SessionID      string    `json:"session_id,omitempty"`
-	Input          string    `json:"input,omitempty"`
-	Job            string    `json:"job,omitempty"`       // background job id, when this run was handed off by another run
-	JobTitle       string    `json:"job_title,omitempty"` // what the job is about, one line
-	Repeats        int       `json:"repeats,omitempty"`   // a skip that kept happening for the same reason, folded into one record
-	Model          string    `json:"model,omitempty"`     // set when the run used a model other than the task's (the light lane)
-	Error          string    `json:"error,omitempty"`
-	CostUSD        float64   `json:"cost_usd,omitempty"`
-	Made           []string  `json:"made,omitempty"` // what the run newly produced (an MR, a comment…), as reported
-	StartedAt      time.Time `json:"started_at"`
-	EndedAt        time.Time `json:"ended_at,omitzero"`
+	ID             string       `json:"id"`
+	TaskID         string       `json:"task_id"`
+	Trigger        string       `json:"trigger"`
+	Status         string       `json:"status"`
+	Summary        string       `json:"summary,omitempty"`
+	Question       string       `json:"question,omitempty"`
+	Options        []string     `json:"options,omitempty"`
+	Recommendation string       `json:"recommendation,omitempty"`
+	Dialog         bool         `json:"dialog,omitempty"`   // stopped on a dialog in the agent's session; Options answer it there
+	Detour         bool         `json:"detour,omitempty"`   // ran in a fresh session because the resident agent was stuck on a dialog
+	StuckOn        *StuckDialog `json:"stuck_on,omitempty"` // on a detour: the dialog the resident agent was stuck on
+	Denied         []string     `json:"denied,omitempty"`   // allow rules for operations the permission rules refused
+	Refused        []string     `json:"refused,omitempty"`  // operations the auto mode classifier refused ("tool：reason")
+	Structured     bool         `json:"structured"`
+	SessionID      string       `json:"session_id,omitempty"`
+	Input          string       `json:"input,omitempty"`
+	Job            string       `json:"job,omitempty"`       // background job id, when this run was handed off by another run
+	JobTitle       string       `json:"job_title,omitempty"` // what the job is about, one line
+	Repeats        int          `json:"repeats,omitempty"`   // a skip that kept happening for the same reason, folded into one record
+	Model          string       `json:"model,omitempty"`     // set when the run used a model other than the task's (the light lane)
+	Error          string       `json:"error,omitempty"`
+	CostUSD        float64      `json:"cost_usd,omitempty"`
+	Made           []string     `json:"made,omitempty"` // what the run newly produced (an MR, a comment…), as reported
+	StartedAt      time.Time    `json:"started_at"`
+	EndedAt        time.Time    `json:"ended_at,omitzero"`
 }
 
 // State is the mutable runtime state of a task, kept in state.json.
@@ -87,6 +95,7 @@ type State struct {
 	OnceDone        bool      `json:"once_done,omitempty"`
 	AnsweredRun     string    `json:"answered_run,omitempty"`  // the needs_you run whose question was last answered
 	AnsweredText    string    `json:"answered_text,omitempty"` // what the owner answered to it
+	AnsweredAt      time.Time `json:"answered_at,omitzero"`    // when a dialog was last pressed from Vigil
 	// Interrupted holds the input of a run cut short by a daemon shutdown; it is re-run at the next start.
 	Interrupted *string `json:"interrupted,omitempty"`
 }
@@ -270,22 +279,32 @@ func (s *Store) archive(id, path string) error {
 	return writeAtomic(filepath.Join(dir, name), old)
 }
 
-// AppendMemory adds dated lines to memory.md, then moves routine notes past their week to the archive.
+// AppendMemory files an agent's notes: rules go to memory.md, facts to knowledge/<topic>.md ("[topic] …"
+// picks the topic; untagged facts go to misc). Old routine notes still in memory.md move to the archive.
 func (s *Store) AppendMemory(id string, notes []string, at time.Time) error {
+	return s.appendNotes(id, notes, at, false)
+}
+
+// AppendRules adds notes that are rules whatever their wording (a decision, a rule the owner accepted)
+// to memory.md.
+func (s *Store) AppendRules(id string, notes []string, at time.Time) error {
+	return s.appendNotes(id, notes, at, true)
+}
+
+func (s *Store) appendNotes(id string, notes []string, at time.Time, rules bool) error {
 	var b strings.Builder
-	for _, n := range notes {
-		n = strings.TrimSpace(n)
-		if n == "" {
-			continue
-		}
-		n = strings.ReplaceAll(n, "\n", " ")
-		if datePrefix.MatchString(n) {
-			fmt.Fprintf(&b, "- %s\n", n) // the agent already dated it
-		} else {
-			fmt.Fprintf(&b, "- %s %s\n", at.Format("2006-01-02"), n)
+	var facts []inNote
+	for _, raw := range notes {
+		n, ok := splitNote(raw, at, rules)
+		switch {
+		case !ok:
+		case n.topic == "":
+			fmt.Fprintf(&b, "- %s %s\n", n.date, n.text)
+		default:
+			facts = append(facts, n)
 		}
 	}
-	if b.Len() == 0 {
+	if b.Len() == 0 && len(facts) == 0 {
 		return nil
 	}
 	path, err := s.taskFile(id, fileMemory)
@@ -294,10 +313,15 @@ func (s *Store) AppendMemory(id string, notes []string, at time.Time) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := appendFile(path, []byte(b.String())); err != nil {
+	if err := appendKnowledge(filepath.Join(filepath.Dir(path), KnowledgeDir), facts); err != nil {
 		return err
 	}
-	return archiveOldMemory(path, at)
+	if b.Len() > 0 {
+		if err := appendFile(path, []byte(b.String())); err != nil {
+			return err
+		}
+	}
+	return archiveOldMemory(path, at) // routine notes written before facts had their own place
 }
 
 // SaveProposal stores a proposed runbook awaiting approval and returns its name.
@@ -309,9 +333,18 @@ func (s *Store) SaveProposal(id, content, reason string, at time.Time) (string, 
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create proposals dir: %w", err)
 	}
-	name := at.UTC().Format("20060102T150405.000000000")
+	name := at.UTC().Format(proposalLayout)
 	body := "<!-- reason: " + strings.ReplaceAll(reason, "-->", "") + " -->\n" + content
 	return name, writeAtomic(filepath.Join(dir, name+".md"), []byte(body))
+}
+
+// proposalLayout names proposal files; only names in this form are proposals, so a draft
+// an agent leaves in proposals/ can never be approved over the runbook.
+const proposalLayout = "20060102T150405.000000000"
+
+func isProposalName(name string) bool {
+	_, err := time.Parse(proposalLayout, name)
+	return err == nil
 }
 
 // Proposal is a pending runbook change.
@@ -336,7 +369,8 @@ func (s *Store) Proposals(id string) ([]Proposal, error) {
 	}
 	var out []Proposal
 	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".md") {
+		name, ok := strings.CutSuffix(e.Name(), ".md")
+		if !ok || !isProposalName(name) {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
@@ -344,7 +378,7 @@ func (s *Store) Proposals(id string) ([]Proposal, error) {
 			return nil, fmt.Errorf("read proposal: %w", err)
 		}
 		reason, content := splitReason(string(data))
-		out = append(out, Proposal{Name: strings.TrimSuffix(e.Name(), ".md"), Reason: reason, Content: content})
+		out = append(out, Proposal{Name: name, Reason: reason, Content: content})
 	}
 	return out, nil
 }
@@ -363,7 +397,7 @@ func splitReason(body string) (string, string) {
 
 // ResolveProposal applies (approve=true) or discards a proposal.
 func (s *Store) ResolveProposal(id, name string, approve bool) error {
-	if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") || name == "" {
+	if !isProposalName(name) {
 		return fmt.Errorf("invalid proposal name %q", name)
 	}
 	dir, err := s.taskFile(id, dirProposal)

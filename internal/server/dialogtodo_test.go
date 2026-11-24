@@ -21,6 +21,17 @@ func detourRun(t *testing.T, s *Server, id string, at int64) {
 	}
 }
 
+// stuckDetourRun is a detour that found the agent stuck on the dialog summary.
+func stuckDetourRun(t *testing.T, s *Server, id, summary string, at int64) {
+	t.Helper()
+	if err := s.Store.AppendRun(store.RunRecord{ID: id, TaskID: "slack", Trigger: runner.ByStream, Status: store.StatusOK,
+		Detour: true, Summary: "（常驻会话停在确认框上，这一轮改在临时会话里跑了）\n回了一条", Input: "x",
+		StuckOn:   &store.StuckDialog{Summary: summary, Question: "agent 在等你回答「Do you want to proceed?」", Options: []string{"Yes", "No"}},
+		StartedAt: time.Unix(at, 0), EndedAt: time.Unix(at+1, 0)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func okRun(t *testing.T, s *Server, id string, at int64) {
 	t.Helper()
 	if err := s.Store.AppendRun(store.RunRecord{ID: id, TaskID: "slack", Trigger: runner.ByStream, Status: store.StatusOK,
@@ -150,5 +161,72 @@ func TestAnsweringFromTheTaskClosesTheDialogTodo(t *testing.T) {
 	}
 	if n := len(openDialogTodos(t, s)); n != 0 {
 		t.Fatalf("%d dialog todos left open after answering from the task", n)
+	}
+}
+
+// 11-23: the owner pressed Yes on a prod-query dialog, the agent ran it and then stopped on a second
+// prod-query dialog in the same round. The later rounds detoured, but no to-do asked about the second one.
+func TestASecondDialogInTheSameRoundIsAskedToo(t *testing.T) {
+	s, f := slackTask(t)
+	s.Now = func() time.Time { return time.Unix(150, 0) }
+	dialogRun(t, s, "r1", "小林：在吗", 100)
+	s.syncDialogTodo("slack")
+	first := openDialogTodos(t, s)[0]
+	if _, err := s.AnswerTodo(first.ID, TodoSend, "Yes"); err != nil {
+		t.Fatal(err)
+	}
+	stuckDetourRun(t, s, "d0", "Bash command：回报本轮结果", 140) // started before the answer: the old dialog
+	s.syncDialogTodo("slack")
+	if n := len(openDialogTodos(t, s)); n != 0 {
+		t.Fatalf("%d todos reopened for the dialog already answered", n)
+	}
+
+	stuckDetourRun(t, s, "d1", "Bash command：第二条生产查询", 200)
+	stuckDetourRun(t, s, "d2", "Bash command：第二条生产查询", 300)
+	s.syncDialogTodo("slack")
+	s.syncDialogTodo("slack")
+	todos := openDialogTodos(t, s)
+	if len(todos) != 1 || todos[0].Detail != "Bash command：第二条生产查询" || len(todos[0].Choices) != 2 {
+		t.Fatalf("todos = %+v", todos)
+	}
+	if _, err := s.AnswerTodo(todos[0].ID, TodoSend, "Yes"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.pressed) != 2 || f.pressed[1] != "slack|Bash command：第二条生产查询|Yes" {
+		t.Fatalf("pressed = %q", f.pressed)
+	}
+	s.syncDialogTodo("slack")
+	if n := len(openDialogTodos(t, s)); n != 0 {
+		t.Fatalf("%d todos left after answering the second dialog", n)
+	}
+}
+
+// The same second dialog can be answered from the task card.
+func TestASecondDialogCanBeAnsweredFromTheTask(t *testing.T) {
+	s, f := slackTask(t)
+	s.Now = func() time.Time { return time.Unix(150, 0) }
+	dialogRun(t, s, "r1", "小林：在吗", 100)
+	if _, err := s.Answer("slack", "Yes"); err != nil {
+		t.Fatal(err)
+	}
+	stuckDetourRun(t, s, "d1", "Bash command：第二条生产查询", 200)
+	if _, err := s.Answer("slack", "Yes"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.pressed) != 2 || f.pressed[1] != "slack|Bash command：第二条生产查询|Yes" {
+		t.Fatalf("pressed = %q", f.pressed)
+	}
+}
+
+// A detour stuck on the dialog the open to-do already asks about does not replace that to-do.
+func TestADetourOnTheSameDialogKeepsTheTodo(t *testing.T) {
+	s, _ := slackTask(t)
+	dialogRun(t, s, "r1", "小林：在吗", 100)
+	s.syncDialogTodo("slack")
+	stuckDetourRun(t, s, "d1", "Bash command：回报本轮结果", 200)
+	s.syncDialogTodo("slack")
+	todos := openDialogTodos(t, s)
+	if len(todos) != 1 || todos[0].RunID != "r1" {
+		t.Fatalf("todos = %+v", todos)
 	}
 }

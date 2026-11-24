@@ -50,7 +50,10 @@ func (s *Server) answerDialog(id string, asked store.RunRecord, answer string) (
 		}
 		return nil, err
 	}
-	if _, err := s.Store.UpdateState(id, func(st store.State) store.State { st.AnsweredRun, st.AnsweredText = asked.ID, answer; return st }); err != nil {
+	if _, err := s.Store.UpdateState(id, func(st store.State) store.State {
+		st.AnsweredRun, st.AnsweredText, st.AnsweredAt = asked.ID, answer, s.Now()
+		return st
+	}); err != nil {
 		return nil, err
 	}
 	lost := stuckBehindDialog(runs)

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -32,6 +33,7 @@ type TaskView struct {
 	Proposals int               `json:"proposals"`
 	NeedsYou  *store.RunRecord  `json:"needs_you,omitempty"`
 	Answered  *Answered         `json:"answered,omitempty"` // latest question already answered, run pending
+	Reserved  bool              `json:"reserved,omitempty"` // a system task: it can be paused, not removed
 }
 
 // Answered is a question the owner has answered while the follow-up run has not reported yet.
@@ -41,7 +43,7 @@ type Answered struct {
 }
 
 func (s *Server) view(t task.Task, live map[string]runner.LiveRun, now time.Time) TaskView {
-	v := TaskView{Task: t, Recent: []store.RunRecord{}}
+	v := TaskView{Task: t, Recent: []store.RunRecord{}, Reserved: s.reserved(t.ID)}
 	v.State, _ = s.Store.State(t.ID)
 	if t.Enabled {
 		if next, ok := schedule.Next(t, now); ok {
@@ -138,7 +140,37 @@ func (s *Server) taskDetail(_ http.ResponseWriter, r *http.Request) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"view": v, "runs": runs, "docs": docs, "yaml": string(yaml), "proposals": proposals, "held": held, "week": week}, nil
+	knowledge, err := s.Store.Knowledge(id)
+	if err != nil {
+		return nil, err
+	}
+	memory := map[string]any{"bytes": len(docs["memory"]), "cap": store.MemoryCap, "knowledge": knowledge}
+	autonomy, err := s.taskAutonomy(id)
+	if err != nil {
+		return nil, err
+	}
+	evolution, err := s.taskEvolution(t)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"view": v, "runs": runs, "docs": docs, "yaml": string(yaml), "proposals": proposals, "held": held, "week": week,
+		"memory": memory, "autonomy": autonomy, "evolution": evolution}, nil
+}
+
+// knowledgeTopic returns one of a task's knowledge files.
+func (s *Server) knowledgeTopic(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, topic := r.PathValue("id"), r.PathValue("topic")
+	if _, err := s.Store.Get(id); err != nil {
+		return nil, err
+	}
+	content, err := s.Store.ReadKnowledge(id, topic)
+	if errors.Is(err, store.ErrNoTopic) {
+		return nil, badRequest("没有知识主题 %s", topic)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"topic": topic, "content": content}, nil
 }
 
 type applyBody struct {
@@ -185,8 +217,17 @@ func (s *Server) changed(id, what string) {
 	s.Engine.Hub().Publish(runner.Event{Type: "task.changed", TaskID: id, Text: what})
 }
 
+// reserved reports whether a task belongs to Vigil itself: the self-evolution task can be paused (or
+// switched off with evolve_task: "-" in config.yaml), but not removed.
+func (s *Server) reserved(id string) bool {
+	return s.Evolve != nil && s.Evolve.Task == id
+}
+
 func (s *Server) removeTask(_ http.ResponseWriter, r *http.Request) (any, error) {
 	id := r.PathValue("id")
+	if s.reserved(id) {
+		return nil, &httpError{code: http.StatusForbidden, msg: "自进化是系统保留任务，不能删除；不想让它跑可以暂停，或在 config.yaml 里写 evolve_task: \"-\" 关掉"}
+	}
 	if s.Engine.Active(id) {
 		return nil, &httpError{code: http.StatusConflict, msg: "任务正在运行（或有后台子任务没跑完），等结束再删除"}
 	}
@@ -276,6 +317,9 @@ func (s *Server) Answer(id, text string) (map[string]any, error) {
 	if _, err := s.Store.Get(id); err != nil {
 		return nil, err
 	}
+	if d, ok := s.taskOpenDialog(id); ok {
+		return s.answerDialog(id, d, answer)
+	}
 	runs, err := s.Store.Runs(id, dialogRunsScanned)
 	if err != nil {
 		return nil, err
@@ -323,7 +367,7 @@ func (s *Server) Answer(id, text string) (map[string]any, error) {
 		}
 		// Remember the decision so the same question is not asked again.
 		note := "决策：" + oneLine(asked.Question) + " → " + oneLine(answer)
-		if err := s.Store.AppendMemory(id, []string{note}, s.Now()); err != nil {
+		if err := s.Store.AppendRules(id, []string{note}, s.Now()); err != nil {
 			return nil, err
 		}
 	}
@@ -505,12 +549,35 @@ func (s *Server) resolveProposal(_ http.ResponseWriter, r *http.Request) (any, e
 	if err := decode(r, &b); err != nil {
 		return nil, err
 	}
-	id := r.PathValue("id")
-	if err := s.Store.ResolveProposal(id, r.PathValue("name"), b.Approve); err != nil {
+	id, name := r.PathValue("id"), r.PathValue("name")
+	reason := proposalReason(s.Store, id, name)
+	if err := s.Store.ResolveProposal(id, name, b.Approve); err != nil {
 		return nil, badRequest("%v", err)
 	}
 	s.changed(id, "proposal")
+	s.wakeEvolve(id, proposalFeedback(id, reason, b.Approve))
 	return map[string]bool{"approved": b.Approve}, nil
+}
+
+// proposalReason is why a pending runbook proposal was made ("" when it cannot be read).
+func proposalReason(st *store.Store, id, name string) string {
+	ps, _ := st.Proposals(id)
+	for _, p := range ps {
+		if p.Name == name {
+			return p.Reason
+		}
+	}
+	return ""
+}
+
+// proposalFeedback tells the evolution round about a decided runbook proposal, so what the proposal promised
+// for after approval (dropping the memory lines it folded in, …) gets done, and a declined one is not re-raised.
+func proposalFeedback(id, reason string, approved bool) string {
+	what := "「" + clipRunes(oneLine(reason), 160) + "」"
+	if approved {
+		return "你批准了 " + id + " 的 runbook 修改" + what + "，已经生效：照提议里说的收尾（例如删掉已提炼进 runbook 的记忆行），记账"
+	}
+	return "你驳回了 " + id + " 的 runbook 修改" + what + "：记一笔，以后不要换个说法再提"
 }
 
 func (s *Server) runDone(_ http.ResponseWriter, r *http.Request) (any, error) {

@@ -217,8 +217,13 @@ func cmdDaemon(_ []string) error {
 	}
 	if cfg.EvolveTask != "" && cfg.EvolveTask != "-" {
 		srv.Evolve = &server.Evolver{Task: cfg.EvolveTask, Now: time.Now, Logf: logf,
-			Submit: func(input string) {
-				engine.Submit(runner.Request{TaskID: cfg.EvolveTask, Trigger: runner.ByFeedback, Input: input})
+			Submit: func(task, input string) {
+				req := runner.Request{TaskID: cfg.EvolveTask, Trigger: runner.ByFeedback, Input: input}
+				if task != "" {
+					// One task's round runs in its own lane: feedback on one task merges, different tasks do not.
+					req.Job, req.JobTitle = "evolve-"+task, "进化「"+task+"」"
+				}
+				engine.Submit(req)
 			},
 			After: func(d time.Duration, f func()) {
 				time.AfterFunc(d, func() {

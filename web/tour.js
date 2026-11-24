@@ -1,16 +1,17 @@
-// Guided tour for first-time users: create a first task, then meet the task drawer's tabs.
+// Guided tour for first-time users: create a first task, meet the task drawer's tabs, and, once there is
+// a task of their own, a walk around the console itself (dial, to-dos, follow-ups, task list, settings).
 // One step at a time a ring lights up the thing to look at and a card explains it. Steps that wait
 // for the user (open the forge, start it) move on by themselves once that has happened.
 import { h } from "./util.js";
 import { t } from "./i18n.js";
 
-const STORE_KEY = "vigil.tour"; // per viewer: { welcome, tabs: "done", pending: true }
+const STORE_KEY = "vigil.tour"; // per viewer: { welcome, tabs, console: "done", pending: true }
 const STARTER = "self-evolve";
 const PAD = 6; // px between the target and the ring
 const GAP = 14; // px between the ring and the card
 const GUTTER = 16; // px kept clear at the viewport edges
 
-const TAB_ORDER = ["runs", "brief", "runbook", "memory", "config"];
+const TAB_ORDER = ["runs", "brief", "runbook", "memory", "evolve", "config"]; // the drawer's tab order, see detail.js
 
 function load() {
   try {
@@ -57,6 +58,21 @@ function tabsSteps() {
   ];
 }
 
+/** The console's parts. Steps marked optional are dropped when their target is not on the page. */
+function consoleSteps() {
+  const step = (target, key, optional = false, extra = {}) =>
+    ({ target, title: `tour.console.${key}.title`, body: `tour.console.${key}.body`, optional, ...extra });
+  return [
+    step(q("#headline"), "headline"),
+    step(q("#dial"), "dial"),
+    step(q("#legend"), "legend"),
+    step(q("#needs .need.todo"), "todo", true),
+    step(q("#needs .follows"), "follows", true, { enter: (el) => { el.open = true; } }),
+    step(q("#tasks .task"), "tasks", true),
+    step(q("#settings"), "settings", false, { next: "tour.end.ok" }),
+  ];
+}
+
 let active = null; // { name, steps, i, root, ring, card, frame, entered }
 
 function stop(markDone = true) {
@@ -75,8 +91,9 @@ function onKey(e) {
   }
 }
 
-function run(name, steps) {
+function run(name, allSteps) {
   stop(false);
+  const steps = allSteps.filter((st) => !st.optional || visible(st.target()));
   const ring = h("div", { class: "coach-ring", "aria-hidden": true });
   const card = h("div", { class: "coach-card", role: "dialog", "aria-live": "polite", "aria-label": t("tour.aria") });
   const root = h("div", { class: "coach" }, ring, card);
@@ -144,14 +161,25 @@ function place(el) {
   // Only transform moves (cheap to animate); the size snaps to the target.
   Object.assign(ring.style, { opacity: "1", transform: `translate(${r.left - PAD}px, ${r.top - PAD}px)`,
     width: `${r.width + PAD * 2}px`, height: `${r.height + PAD * 2}px` });
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
   const cw = card.offsetWidth;
   const ch = card.offsetHeight;
-  const below = r.bottom + PAD + GAP;
-  const top = below + ch <= vh - GUTTER ? below : Math.max(GUTTER, r.top - PAD - GAP - ch);
-  const left = Math.min(Math.max(GUTTER, r.left), vw - cw - GUTTER);
+  const { left, top } = cardSpot(r, cw, ch, window.innerWidth, window.innerHeight);
   card.style.transform = `translate(${left}px, ${top}px)`;
+}
+
+/** Below the target, else above it; a target too tall for either (the dial) gets the card beside it. */
+function cardSpot(r, cw, ch, vw, vh) {
+  const clampX = (x) => Math.min(Math.max(GUTTER, x), vw - cw - GUTTER);
+  const clampY = (y) => Math.min(Math.max(GUTTER, y), vh - ch - GUTTER);
+  const below = r.bottom + PAD + GAP;
+  if (below + ch <= vh - GUTTER) return { left: clampX(r.left), top: below };
+  const above = r.top - PAD - GAP - ch;
+  if (above >= GUTTER) return { left: clampX(r.left), top: above };
+  const right = r.right + PAD + GAP;
+  if (right + cw <= vw - GUTTER) return { left: right, top: clampY(r.top) };
+  const left = r.left - PAD - GAP - cw;
+  if (left >= GUTTER) return { left, top: clampY(r.top) };
+  return { left: clampX(r.left), top: GUTTER }; // nothing fits (a phone): keep it on screen
 }
 
 /** First visit with no task of the user's own: walk them through creating one. */
@@ -167,6 +195,20 @@ export function maybeTabsTour() {
   const st = load();
   if (!st.pending || st.tabs === "done" || active) return;
   run("tabs", tabsSteps());
+}
+
+/** Once there is a task of the owner's own, walk around the console a single time (not over a task drawer). */
+export function maybeConsoleTour(views) {
+  const st = load();
+  if (st.console === "done" || st.pending || active || location.hash.startsWith("#/task/")) return;
+  if (!views.some((v) => v.task.id !== STARTER)) return;
+  run("console", consoleSteps());
+}
+
+/** Settings: walk around the console again. */
+export function startConsoleTour() {
+  if (location.hash.startsWith("#/task/")) location.hash = "";
+  run("console", consoleSteps());
 }
 
 /** Open a task (when given) and walk through its drawer. */

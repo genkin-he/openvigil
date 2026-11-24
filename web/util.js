@@ -143,3 +143,18 @@ export function debounce(fn, ms) {
   let timer;
   return (...a) => { clearTimeout(timer); timer = setTimeout(() => fn(...a), ms); };
 }
+
+// Line icons drawn on one 24-unit grid with one stroke, so buttons that sit side by side match in size and
+// weight (text glyphs such as ✓ and × come from different fonts and never line up).
+const ICON_PATHS = {
+  close: ["M6 6l12 12", "M18 6L6 18"],
+  check: ["M5 12.5l4.5 4.5L19 7.5"],
+  help: ["M8.2 8.6a3.9 3.9 0 0 1 7.6 1.3c0 2.6-3.8 3.1-3.8 5.6", "M12 19.4v.1"],
+};
+
+/** A line icon by name (see ICON_PATHS), sized in px and drawn in currentColor. */
+export function icon(name, size = 16) {
+  return s("svg", { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", "stroke-width": 1.9,
+    "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" },
+    ...(ICON_PATHS[name] || []).map((d) => s("path", { d })));
+}

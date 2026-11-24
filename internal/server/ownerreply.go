@@ -264,7 +264,7 @@ func (s *Server) keepOwnerReply(it inbox.Item, channel string, m slackctl.Messag
 	if r.Shadow {
 		what = "agent 私下拟的回复"
 	}
-	s.wakeEvolve("你在「" + it.Title + "」里亲手回了，和" + what + "不一样（待办 " + it.ID + "）")
+	s.wakeEvolve(it.TaskID, "你在「"+it.Title+"」里亲手回了，和"+what+"不一样（待办 "+it.ID+"）")
 }
 
 // ownerRepliesSince lists the samples found at or after from, oldest first, at most the newest max.

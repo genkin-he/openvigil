@@ -77,7 +77,7 @@ func (s *Server) learnFrom(it inbox.Item, decision string, feedback bool) {
 		return
 	}
 	if fb := feedbackFor(it, decision); feedback && fb != "" {
-		s.wakeEvolve(fb)
+		s.wakeEvolve(it.TaskID, fb)
 	}
 	s.proposeFor(it.TaskID, it.Kind)
 }
@@ -306,7 +306,7 @@ func (s *Server) settleRule(it inbox.Item, mode, text string) (inbox.Item, error
 	if _, err := s.Inbox.Answer(it.ID, rule); err != nil {
 		return inbox.Item{}, todoErr(err) // someone else settled it first
 	}
-	if err := s.Store.AppendMemory(it.TaskID, []string{rule}, s.Now()); err != nil {
+	if err := s.Store.AppendRules(it.TaskID, []string{rule}, s.Now()); err != nil {
 		if _, nerr := s.Inbox.Note(it.ID, "写入长期记忆失败："+err.Error(), true); nerr != nil {
 			s.logf("todo %s: reopen after failed memory write: %v", it.ID, nerr)
 		}

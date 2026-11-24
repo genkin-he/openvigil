@@ -359,7 +359,25 @@ func cmdMemory(args []string) error {
 	if len(args) < 3 || args[1] != "append" {
 		return errors.New(commands["memory"].usage)
 	}
-	return simplePost("memory", "/memory", args[:1], map[string]string{"text": strings.Join(args[2:], " ")})
+	text, topic := memoryText(args[2:])
+	if topic != "" {
+		text = "[" + topic + "] " + text // a fact: filed under its topic, not in memory.md
+	}
+	return simplePost("memory", "/memory", args[:1], map[string]string{"text": text})
+}
+
+// memoryText reads "[--topic <topic>] text…".
+func memoryText(args []string) (text, topic string) {
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--topic" && i+1 < len(args) {
+			topic = args[i+1]
+			i++
+			continue
+		}
+		rest = append(rest, args[i])
+	}
+	return strings.Join(rest, " "), topic
 }
 
 func cmdAmend(args []string) error {

@@ -179,3 +179,29 @@ func TestARefreshKeepsTheChoices(t *testing.T) {
 		t.Fatalf("refresh = %+v", again)
 	}
 }
+
+func TestOwnerCanStillAnswerAnItemItsTaskClosed(t *testing.T) {
+	b := newBox(t)
+	it, _, _ := b.Add(Item{TaskID: "t", Title: "a"})
+	if _, err := b.CloseByTask(it.ID, "对方已拍板，转为排期待办"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.Answer(it.ID, "维持 a")
+	if err != nil || got.Status != StatusAnswered || got.Answer != "维持 a" || got.TaskClosed {
+		t.Fatalf("answer after task close: %+v %v", got, err)
+	}
+	if got.Outcome != "对方已拍板，转为排期待办" {
+		t.Fatalf("the task's reason for closing must stay for the task to see: %q", got.Outcome)
+	}
+}
+
+func TestOwnerClosedItemStaysClosed(t *testing.T) {
+	b := newBox(t)
+	it, _, _ := b.Add(Item{TaskID: "t", Title: "a"})
+	if _, err := b.Close(it.ID, "不用管"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Answer(it.ID, "发"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("answer after owner close err = %v", err)
+	}
+}

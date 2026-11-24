@@ -31,8 +31,9 @@ const (
 // outcome is the executor-independent result of one run.
 type outcome struct {
 	dialog      bool
-	detour      bool // ran beside a resident agent stuck on a dialog
-	unsent      bool // a resident round that never reached the agent: it was already stuck on a dialog
+	detour      bool               // ran beside a resident agent stuck on a dialog
+	unsent      bool               // a resident round that never reached the agent: it was already stuck on a dialog
+	stuck       *store.StuckDialog // on a detour: the dialog the agent was stuck on
 	denied      []string
 	refused     []string
 	status      string
@@ -103,7 +104,9 @@ func (e *Engine) execute(req Request) {
 		text := prompt.Build(e.promptContext(t, st, dir, rec, input))
 		out = e.dispatch(t, st, text, rec.ID, dir, req.AllowTools)
 		if out.unsent {
+			stuck := &store.StuckDialog{Summary: out.res.Summary, Question: out.res.Question, Options: out.res.Options}
 			out = e.detour(t, st, dir, rec, input, req.AllowTools)
+			out.stuck = stuck
 		}
 	}
 
@@ -272,6 +275,11 @@ func (e *Engine) promptContext(t task.Task, st store.State, dir string, rec stor
 	if owner, err := e.cfg.Store.ReadOwner(); err == nil && strings.TrimSpace(owner) != "" {
 		c.OwnerDoc = e.cfg.Store.OwnerPath()
 	}
+	if topics, err := e.cfg.Store.Knowledge(t.ID); err == nil {
+		for _, k := range topics {
+			c.Knowledge = append(c.Knowledge, prompt.Topic{Name: k.Topic, Entries: k.Entries, Bytes: k.Bytes})
+		}
+	}
 	runs, _ := e.cfg.Store.Runs(t.ID, historyRuns)
 	failing := true
 	for _, r := range runs {
@@ -294,39 +302,64 @@ func (e *Engine) dispatch(t task.Task, st store.State, text, runID, dir string, 
 	if t.Mode == task.ModeResident {
 		return e.dispatchResident(t, st, text, runID)
 	}
-	return askAboutDenials(e.dispatchHeadless(t, st, text, dir, filepath.Join(dir, "logs", runID+".jsonl"), allow))
+	return e.headless(t, st, text, dir, filepath.Join(dir, "logs", runID+".jsonl"), allow)
 }
 
 // DenialQuestion is the question asked when the permission system refused operations in a run.
 const DenialQuestion = "这一轮有操作被权限拦下了，允许后重跑吗？"
 
+// unliftableNote is added to a round's summary for operations refused although they were already allowed.
+const unliftableNote = "被你自己的确认规则拦下、放行也绕不过的操作（这一轮按现有结果算）："
+
 // askAboutDenials turns refused operations into a decision for the owner: allow them once and re-run.
-func askAboutDenials(out outcome) outcome {
+// Operations refused although granted (the task's allowed tools or this run's one-off grants) were stopped
+// by something no allow rule lifts, such as the owner's own ask rules for prod commands in a session with no
+// one to answer: asking again would offer a re-run that is refused the same way, so they are only reported.
+func askAboutDenials(out outcome, granted []string) outcome {
 	if len(out.denied) == 0 || out.status == store.StatusFail || out.status == store.StatusTimeout {
 		return out
 	}
+	var liftable, unliftable []string
+	for _, d := range out.denied {
+		if slices.Contains(granted, d) {
+			unliftable = append(unliftable, d)
+		} else {
+			liftable = append(liftable, d)
+		}
+	}
 	res := out.res
-	res.Status = result.NeedsYou
-	res.Question = DenialQuestion + "被拦的：" + strings.Join(out.denied, "、")
-	res.Options = []string{"A: 允许一次，重跑一轮", "B: 永久放行（写进任务配置，以后不再拦），重跑一轮", "C: 不允许，这一轮就按现在的结果算"}
-	res.Recommendation = "A"
-	out.status, out.res = store.StatusNeedsYou, res
+	if len(unliftable) > 0 {
+		res.Summary = strings.TrimSpace(res.Summary + "\n" + unliftableNote + strings.Join(unliftable, "、"))
+	}
+	if len(liftable) > 0 {
+		res.Status = result.NeedsYou
+		res.Question = DenialQuestion + "被拦的：" + strings.Join(liftable, "、")
+		res.Options = []string{"A: 允许一次，重跑一轮", "B: 永久放行（写进任务配置，以后不再拦），重跑一轮", "C: 不允许，这一轮就按现在的结果算"}
+		res.Recommendation = "A"
+		out.status = store.StatusNeedsYou
+	}
+	out.res = res
 	return out
 }
 
 func (e *Engine) dispatchHeadless(t task.Task, st store.State, text, dir, logPath string, allow []string) outcome {
-	resume := ""
 	if t.Session.Mode == task.SessionContinue && st.SessionID != "" && st.SessionRuns < t.Session.RotateEvery {
-		resume = st.SessionID
+		return e.headlessOnce(t, text, st, dir, logPath, allow)
 	}
+	return e.headlessOnce(t, text, store.State{}, dir, logPath, allow)
+}
+
+// headlessOnce runs one headless turn, resuming prev.SessionID when it is set.
+func (e *Engine) headlessOnce(t task.Task, text string, prev store.State, dir, logPath string, allow []string) outcome {
+	resume := prev.SessionID
 	o := e.cfg.Headless.Run(e.ctx, exec.Request{Task: t, Prompt: text, ResumeSession: resume, LogPath: logPath, AllowTools: allow, TaskDir: dir})
 	out := outcome{sessionID: o.SessionID, cost: o.CostUSD, sessionCost: o.CostUSD, sessionRuns: 1, denied: o.Denied, refused: o.Refused}
 	if resume != "" {
-		out.sessionRuns = st.SessionRuns + 1
+		out.sessionRuns = prev.SessionRuns + 1
 		// claude reports a resumed session's total so far: the run itself cost only the difference.
-		out.cost = runCost(o.CostUSD, st.SessionCost)
+		out.cost = runCost(o.CostUSD, prev.SessionCost)
 		if o.CostUSD == 0 {
-			out.sessionCost = st.SessionCost // no report (e.g. killed on timeout): keep the baseline
+			out.sessionCost = prev.SessionCost // no report (e.g. killed on timeout): keep the baseline
 		}
 	}
 	switch {
@@ -339,6 +372,54 @@ func (e *Engine) dispatchHeadless(t task.Task, st store.State, text, dir, logPat
 		out.status, out.res, out.structured = classify(o.FinalText, o.IsError)
 	}
 	return out
+}
+
+// shapePrefixes are commands a permission rule blocks only for how a command line is written: rules match a
+// command by its start, so a line opening with cd / set / export … (or chaining several commands) misses the
+// rule that allows what it actually runs. Rewriting the line is enough; nothing needs the owner's say.
+var shapePrefixes = map[string]bool{"cd": true, "set": true, "export": true, "source": true, "for": true,
+	"while": true, "if": true, "pushd": true, "eval": true}
+
+// shapeOnly reports whether every blocked rule (e.g. "Bash(cd:*)") is about how a command was written.
+func shapeOnly(denied []string) bool {
+	if len(denied) == 0 {
+		return false
+	}
+	for _, d := range denied {
+		inner, ok := strings.CutPrefix(d, "Bash(")
+		name, _, _ := strings.Cut(strings.TrimSuffix(inner, ")"), ":")
+		if !ok || !shapePrefixes[strings.TrimSpace(name)] {
+			return false
+		}
+	}
+	return true
+}
+
+// reshapeGuide tells the resumed session why it was stopped and how to write the command instead.
+func reshapeGuide(denied []string) string {
+	return "你上一步有命令被权限规则拦下了（被拦的：" + strings.Join(denied, "、") + "）。这是写法问题，不是权限不够：" +
+		"规则按命令开头匹配，以 cd / set / export 等开头、或把几条命令用 && ; | 串成一行的，都对不上放行规则。\n" +
+		"改成：每条命令单独执行；不要 cd，用绝对路径、git -C <仓库>、make -C <目录>；不要先 set / export 变量，把值直接写进命令。\n" +
+		"从被拦的那一步接着做完。已经做过的（发过的消息、建过的待办、提交过的代码）不要重做。做完照原来的格式汇报。"
+}
+
+// reshape gives a run that was blocked only for how its commands were written one more turn in the same
+// session, told how to write them, before anything goes to the owner. Same permissions, same rules: only
+// the command lines change.
+func (e *Engine) reshape(t task.Task, out outcome, dir, logPath string, allow []string) outcome {
+	if !shapeOnly(out.denied) || out.status == store.StatusFail || out.status == store.StatusTimeout || out.sessionID == "" {
+		return out
+	}
+	prev := store.State{SessionID: out.sessionID, SessionCost: out.sessionCost, SessionRuns: out.sessionRuns}
+	again := e.headlessOnce(t, reshapeGuide(out.denied), prev, dir, logPath, allow)
+	again.cost += out.cost
+	return again
+}
+
+// headless runs a headless turn, retries a shape-only block once, and puts any block left to the owner.
+func (e *Engine) headless(t task.Task, st store.State, text, dir, logPath string, allow []string) outcome {
+	out := e.reshape(t, e.dispatchHeadless(t, st, text, dir, logPath, allow), dir, logPath, allow)
+	return askAboutDenials(out, append(slices.Clone(t.Agent.AllowedTools), allow...))
 }
 
 // runCost is one run's cost given the session totals before and after it. A total lower than before means
@@ -389,7 +470,7 @@ func (e *Engine) dispatchResident(t task.Task, st store.State, text, runID strin
 // runAside runs a round in a fresh headless session beside the task's own one, which carries on untouched.
 func (e *Engine) runAside(t task.Task, st store.State, dir string, rec store.RunRecord, input string, allow []string) outcome {
 	text := prompt.Build(e.promptContext(t, st, dir, rec, input))
-	out := askAboutDenials(e.dispatchHeadless(t, store.State{}, text, dir, filepath.Join(dir, "logs", rec.ID+".jsonl"), allow))
+	out := e.headless(t, store.State{}, text, dir, filepath.Join(dir, "logs", rec.ID+".jsonl"), allow)
 	out.sessionID, out.sessionRuns, out.sessionCost = st.SessionID, st.SessionRuns, st.SessionCost
 	return out
 }
@@ -471,6 +552,7 @@ func (e *Engine) finish(t task.Task, req Request, rec store.RunRecord, out outco
 	rec.Question, rec.Options, rec.Recommendation = out.res.Question, out.res.Options, out.res.Recommendation
 	rec.SessionID, rec.CostUSD, rec.Error, rec.EndedAt = out.sessionID, out.cost, out.errText, now
 	rec.Denied, rec.Refused, rec.Dialog, rec.Detour = out.denied, out.refused, out.dialog, out.detour
+	rec.StuckOn = out.stuck
 	if err := s.AppendRun(rec); err != nil {
 		e.cfg.Logf("run %s: record end: %v", t.ID, err)
 	}
@@ -618,7 +700,7 @@ func (e *Engine) executeJob(t task.Task, st store.State, dir string, req Request
 	jt.Run.Timeout = task.Duration(max(t.Run.Timeout.Std(), jobTimeout))
 	c := e.promptContext(jt, st, dir, rec, req.Input)
 	c.Job = req.JobTitle
-	out := askAboutDenials(e.dispatchHeadless(jt, store.State{}, prompt.Build(c), dir, filepath.Join(dir, "logs", rec.ID+".jsonl"), req.AllowTools))
+	out := e.headless(jt, store.State{}, prompt.Build(c), dir, filepath.Join(dir, "logs", rec.ID+".jsonl"), req.AllowTools)
 	e.setLive(key, nil)
 
 	if e.ctx.Err() != nil {

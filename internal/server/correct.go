@@ -87,7 +87,11 @@ func (s *Server) noteCorrection(g []string) {
 	if seen {
 		return // the same message delivered again (reconnect, backfill)
 	}
-	s.wakeEvolve("纠错 " + channel + ":" + ts + "：" + text)
+	task := ""
+	if s.Mirror != nil {
+		task = s.Mirror.Task // corrections are said in Slack, about the task the Slack watch feeds
+	}
+	s.wakeEvolve(task, "纠错 "+channel+":"+ts+"："+text)
 }
 
 // isRevoke reports whether an item proposes taking a line out of a task's memory.

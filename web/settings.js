@@ -45,7 +45,7 @@ let wired = null; // the settings button and hooks, so other views can open the 
 /**
  * Wire the settings button.
  * @param {HTMLElement} button the header button that toggles the panel
- * @param {{onChange: Function, onTour: Function}} hooks onChange re-renders after a layout change
+ * @param {{onChange: Function, onTour: Function, onConsoleTour: Function}} hooks onChange re-renders after a layout change
  */
 export function initSettings(button, hooks) {
   wired = { button, hooks };
@@ -84,7 +84,8 @@ function open(button, hooks, { autoDoctor = false } = {}) {
     section(t("settings.lang"), langChoices()),
     section(t("settings.tour"), h("div", { class: "settings-row" },
       h("p", { class: "settings-hint", text: t("settings.tourHint") }),
-      h("button", { class: "btn", type: "button", text: t("settings.tourReplay"), onclick: () => { close(); hooks.onTour(); } }))),
+      h("button", { class: "btn", type: "button", text: t("settings.tourReplay"), onclick: () => { close(); hooks.onTour(); } }),
+      h("button", { class: "btn", type: "button", text: t("settings.tourConsole"), onclick: () => { close(); hooks.onConsoleTour(); } }))),
     migrateSection({ autoDoctor, onExported: hooks.onExported }));
   document.body.append(el);
   // A confirm dialog opened from the panel sits outside it: clicks and Esc there are the dialog's.

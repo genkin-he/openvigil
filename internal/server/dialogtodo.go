@@ -33,20 +33,47 @@ func isDetour(r store.RunRecord) bool {
 	return r.Detour || strings.HasPrefix(r.Summary, runner.DetourNote)
 }
 
-// openDialog is the dialog the task's resident agent is still stuck on: the newest round that is not a
-// detour or still in progress, when that round stopped on a dialog nobody has answered from Vigil.
-// runs are newest first.
+// openDialog is the dialog the task's resident agent is still stuck on, runs newest first. It is the newest
+// round that is not a detour or still in progress, when that round stopped on a dialog nobody has answered
+// from Vigil, unless a later detour found the agent on another dialog: after one dialog is answered the
+// agent carries on with the same round and may stop on the next one, which only the detours see. Detours
+// that started before the last answer saw the dialog that answer settled.
 func openDialog(runs []store.RunRecord, st store.State) (store.RunRecord, bool) {
-	for _, r := range runs {
-		if isDetour(r) || r.Status == store.StatusRunning || r.Status == store.StatusSkipped || r.Job != "" {
+	var stuck *store.RunRecord
+	sawStuck := false // only the newest detour that saw a dialog tells what the agent is on now
+	for i, r := range runs {
+		if r.Status == store.StatusRunning || r.Status == store.StatusSkipped || r.Job != "" {
 			continue
 		}
-		if r.Dialog && r.Status == store.StatusNeedsYou && st.AnsweredRun != r.ID {
+		if isDetour(r) {
+			if !sawStuck && r.StuckOn != nil {
+				sawStuck = true
+				if r.StartedAt.After(st.AnsweredAt) && st.AnsweredRun != r.ID {
+					stuck = &runs[i]
+				}
+			}
+			continue
+		}
+		answered := st.AnsweredRun == r.ID || r.StartedAt.Before(st.AnsweredAt)
+		if r.Dialog && r.Status == store.StatusNeedsYou && !answered &&
+			(stuck == nil || stuck.StuckOn.Summary == r.Summary) {
 			return r, true
 		}
-		return store.RunRecord{}, false
+		break
+	}
+	if stuck != nil {
+		return dialogRecord(*stuck), true
 	}
 	return store.RunRecord{}, false
+}
+
+// dialogRecord is a run as the dialog it asks about: a detour stands for the dialog it found the agent on.
+func dialogRecord(r store.RunRecord) store.RunRecord {
+	if r.StuckOn == nil {
+		return r
+	}
+	return store.RunRecord{ID: r.ID, TaskID: r.TaskID, Trigger: r.Trigger, Status: store.StatusNeedsYou, Dialog: true,
+		Summary: r.StuckOn.Summary, Question: r.StuckOn.Question, Options: r.StuckOn.Options, StartedAt: r.StartedAt}
 }
 
 // taskOpenDialog loads what openDialog needs for one task.
@@ -148,6 +175,7 @@ func (s *Server) settleDialogTodo(it inbox.Item, mode, text string) (inbox.Item,
 	if !found {
 		return inbox.Item{}, badRequest("找不到提出这个确认框的那一轮 %s", it.RunID)
 	}
+	rec = dialogRecord(rec)
 	if _, err := s.answerDialog(it.TaskID, rec, answer); err != nil {
 		if errors.Is(err, errDialogChanged) {
 			s.closeDialogTodo(it, "确认框已经不在了，没有按任何选项")

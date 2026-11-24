@@ -1,5 +1,5 @@
 // To-do cards: things an agent needs the owner to decide or confirm, answered right here.
-import { h, api, toast, hm, mdhm, richText } from "./util.js";
+import { h, api, toast, hm, mdhm, richText, icon } from "./util.js";
 import { t } from "./i18n.js";
 import { draftField, clearDrafts } from "./drafts.js";
 import { replayFold } from "./trust.js";
@@ -241,10 +241,10 @@ export function followList(follows, taskNames) {
         t("follow.meta", { who: f.who || "—", task: taskNames.get(f.task) || f.task, due: mdhm(new Date(f.due)), nudges: f.nudges || 0 }),
         h("span", { class: "follow-checking", text: " · " + t("follow.checking") })),
       h("span", { class: "follow-actions" },
-        h("button", { class: "follow-btn follow-check", type: "button", text: "✓", title: t("follow.check"), "aria-label": t("follow.check"),
-          disabled: checking, onclick: (e) => checkFollow(f, row, e.currentTarget) }),
-        h("button", { class: "follow-btn follow-drop", type: "button", text: "×", title: t("follow.drop"), "aria-label": t("follow.drop"),
-          onclick: (e) => dropFollow(f, row, e.currentTarget) })));
+        h("button", { class: "follow-btn follow-check", type: "button", title: t("follow.check"), "aria-label": t("follow.check"),
+          disabled: checking, onclick: (e) => checkFollow(f, row, e.currentTarget) }, icon("check", 15)),
+        h("button", { class: "follow-btn follow-drop", type: "button", title: t("follow.drop"), "aria-label": t("follow.drop"),
+          onclick: (e) => dropFollow(f, row, e.currentTarget) }, icon("close", 14))));
     return row;
   });
   // Remember whether the owner left the list open, so a refresh or reload does not fold it again.

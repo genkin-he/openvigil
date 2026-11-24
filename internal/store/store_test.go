@@ -122,8 +122,8 @@ func TestStateAndMemory(t *testing.T) {
 	if again.FailStreak != 1 {
 		t.Fatalf("state not persisted: %+v", again)
 	}
-	_ = s.AppendMemory("a", []string{"记住 A", " ", "多行\n合并"}, time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC))
-	_ = s.AppendMemory("a", []string{"2026-11-09 自带日期"}, time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC))
+	_ = s.AppendRules("a", []string{"记住 A", " ", "多行\n合并"}, time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC))
+	_ = s.AppendRules("a", []string{"2026-11-09 自带日期"}, time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC))
 	mem, _ := s.ReadDoc("a", DocMemory)
 	if strings.Count(mem, "\n") != 3 || !strings.Contains(mem, "2026-11-10 多行 合并") || strings.Contains(mem, "2026-11-10 2026-11-09") {
 		t.Fatalf("memory = %q", mem)
@@ -139,7 +139,7 @@ func TestRemoveMemoryDropsMatchingLinesOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)
-	if err := s.AppendMemory("a", []string{"我已授权：「问进度」类直接回", "课程接口归 misc-service"}, at); err != nil {
+	if err := s.AppendRules("a", []string{"我已授权：「问进度」类直接回", "课程接口归 misc-service"}, at); err != nil {
 		t.Fatal(err)
 	}
 	n, err := s.RemoveMemory("a", "我已授权：「问进度」类直接回")
@@ -151,7 +151,7 @@ func TestRemoveMemoryDropsMatchingLinesOnly(t *testing.T) {
 		t.Fatalf("memory = %q", mem)
 	}
 	// Only an exact note goes: a fragment of a line must not delete it, a dated copy of the line works.
-	if err := s.AppendMemory("a", []string{"不要自动回复群聊", "群聊"}, at); err != nil {
+	if err := s.AppendRules("a", []string{"不要自动回复群聊", "群聊"}, at); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := s.RemoveMemory("a", "- 2026-11-11 群聊"); err != nil || n != 1 {
@@ -190,5 +190,28 @@ func TestOwnerPrinciplesAppendAndReplaceKeepHistory(t *testing.T) {
 	}
 	if s.OwnerPath() != filepath.Join(s.Root(), "owner.md") {
 		t.Fatalf("path = %s", s.OwnerPath())
+	}
+}
+
+// A draft an agent left in proposals/ is not a proposal: approving it once overwrote a runbook with another task's.
+func TestProposalsIgnoreStrayFiles(t *testing.T) {
+	s := newStore(t)
+	_ = s.Put(manualTask("a"))
+	_ = s.WriteDoc("a", DocRunbook, "mine")
+	dir := filepath.Join(s.Root(), "tasks", "a", "proposals")
+	_ = os.MkdirAll(dir, 0o700)
+	_ = os.WriteFile(filepath.Join(dir, "other-runbook-draft.md"), []byte("# other task runbook"), 0o600)
+	if _, err := s.SaveProposal("a", "v2", "更好", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ps, _ := s.Proposals("a")
+	if len(ps) != 1 || ps[0].Content != "v2" {
+		t.Fatalf("stray draft listed as proposal: %+v", ps)
+	}
+	if err := s.ResolveProposal("a", "other-runbook-draft", true); err == nil {
+		t.Fatal("stray draft approved")
+	}
+	if rb, _ := s.ReadDoc("a", DocRunbook); rb != "mine" {
+		t.Fatalf("runbook = %q", rb)
 	}
 }

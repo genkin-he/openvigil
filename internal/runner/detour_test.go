@@ -40,6 +40,12 @@ func TestARoundThatFindsTheAgentStuckRunsInAFreshSession(t *testing.T) {
 	if st.SessionID != "rs" || st.SessionRuns != 3 {
 		t.Fatalf("resident session overwritten: %+v", st)
 	}
+	// The dialog the agent is stuck on is kept on the detour: it may be a new one, raised after an
+	// earlier dialog in the same round was answered.
+	if r.StuckOn == nil || !strings.Contains(r.StuckOn.Summary, "deploy list --env prod") ||
+		len(r.StuckOn.Options) != 2 || r.StuckOn.Options[0] != "Yes" || !strings.Contains(r.StuckOn.Question, "Do you want to proceed?") {
+		t.Fatalf("stuck on = %+v", r.StuckOn)
+	}
 }
 
 // The round that was running when the dialog came up still asks the owner about it.
@@ -76,8 +82,8 @@ func TestALateReportFillsInTheRoundCutShortByADialog(t *testing.T) {
 	if len(runs) != 1 || runs[0].Status != store.StatusOK || runs[0].Summary != "回复了小林" || runs[0].Dialog || runs[0].Question != "" {
 		t.Fatalf("runs = %+v", runs)
 	}
-	if mem, _ := h.s.ReadDoc("r", store.DocMemory); !strings.Contains(mem, "小林问的是灰度") {
-		t.Fatalf("memory = %q", mem)
+	if topics, _ := h.s.Knowledge("r"); len(topics) != 1 || topics[0].Entries != 1 {
+		t.Fatalf("the late report's memory note was lost: %+v", topics)
 	}
 	if err := h.e.Report(runs[0].ID, result.Result{Status: result.OK, Summary: "再来一次"}); err == nil {
 		t.Fatal("a second late report was accepted")

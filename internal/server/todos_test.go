@@ -225,3 +225,24 @@ func TestARetriedQuestionWithTheSameRefIsMerged(t *testing.T) {
 		t.Fatalf("items = %d", len(items))
 	}
 }
+
+func TestOwnerAnswerOverridesATaskClose(t *testing.T) {
+	s, h := newServer(t)
+	do(h, "POST", "/api/tasks", applyJSON("id: slack\nname: Slack\ntrigger: {kind: manual}\n"), true)
+	it := addTodo(t, h, `{"task_id":"slack","title":"小王：改由后端提频"}`)
+	do(h, "POST", "/api/todos/"+it.ID+"/done", `{"outcome":"小李已拍板按 b 走"}`, true)
+	rec, _ := do(h, "POST", "/api/todos/"+it.ID+"/answer", `{"mode":"instruct","text":"后端已有接口，前端直接实时取"}`, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answer after the task closed it: %d %s", rec.Code, rec.Body)
+	}
+	s.Engine.Wait()
+	runs, _ := s.Store.Runs("slack", 0)
+	if len(runs) != 1 {
+		t.Fatalf("want one answer run, got %d", len(runs))
+	}
+	for _, want := range []string{"后端已有接口", "小李已拍板按 b 走", "以我这次的决定为准"} {
+		if !strings.Contains(runs[0].Input, want) {
+			t.Fatalf("run input missing %q:\n%s", want, runs[0].Input)
+		}
+	}
+}

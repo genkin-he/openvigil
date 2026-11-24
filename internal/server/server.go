@@ -141,6 +141,7 @@ func (s *Server) Handler() http.Handler {
 	api("PUT /api/tasks/{id}/docs/{doc}", s.putDoc)
 	api("POST /api/tasks/{id}/proposals/{name}", s.resolveProposal)
 	api("GET /api/tasks/{id}/runs/{run}/log", s.runLog)
+	api("GET /api/tasks/{id}/knowledge/{topic}", s.knowledgeTopic)
 	api("POST /api/runs/{run}/done", s.runDone)
 	api("GET /api/tasks/{id}/trust", s.taskTrust)
 	api("GET /api/todos", s.todoList)

@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -15,35 +16,42 @@ import (
 // actually helped. Vigil supplies the facts (signals), keeps the change ledger, and wakes the task soon after
 // strong feedback (a correction, an edited or overruled suggestion) instead of waiting for its daily round.
 const (
-	evolveDelay     = 15 * time.Minute // feedback that comes in a burst is handled in one round
-	evolvePerDay    = 4                // feedback rounds a day at most; the daily round runs regardless
+	evolveDelay     = 15 * time.Minute // feedback is handled this soon; a burst of it in one round
+	evolvePerDay    = 8                // feedback rounds a day at most; the daily round runs regardless
 	evolveReasons   = 20
 	evolveLookback  = 7 * 24 * time.Hour // the first round (no earlier run) looks back this far
 	signalTextLen   = 600
 	signalMaxPerSet = 30
 )
 
-// Evolver wakes the self-evolution task after feedback, batching a burst and capping rounds per day.
+// Evolver wakes the self-evolution task soon after feedback, so a lesson is learned before the same mistake
+// comes round again. Feedback is gathered per task: when the burst is over, each task with feedback gets a
+// round of its own (only its signals, only its files), and feedback about the evolution task itself goes to
+// a round over everything. Rounds per day are capped.
 type Evolver struct {
 	Task   string
 	Delay  time.Duration
 	PerDay int
-	Submit func(input string)
+	Submit func(task, input string)    // task "" is a round over all tasks
 	After  func(time.Duration, func()) // default time.AfterFunc
 	Now    func() time.Time
 	Logf   func(string, ...any)
 
 	mu      sync.Mutex
-	pending []string
+	pending map[string][]string // reasons by task
 	armed   bool
+	gen     int // the armed timer's generation; an older timer that fires does nothing
 	day     string
 	count   int
 }
 
-// Wake records why the task should look again and makes sure a round is coming.
-func (e *Evolver) Wake(reason string) {
+// Wake records feedback about a task; a round comes within Delay, taking whatever else arrives meanwhile.
+func (e *Evolver) Wake(task, reason string) {
 	if e == nil || e.Submit == nil {
 		return
+	}
+	if task == e.Task {
+		task = "" // the evolution task's own rules: a round over everything
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -53,8 +61,11 @@ func (e *Evolver) Wake(reason string) {
 			e.pending = nil // yesterday's leftovers were covered by the daily round
 		}
 	}
-	if len(e.pending) < evolveReasons {
-		e.pending = append(e.pending, clipRunes(oneLine(reason), 200))
+	if e.pending == nil {
+		e.pending = map[string][]string{}
+	}
+	if len(e.pending[task]) < evolveReasons {
+		e.pending[task] = append(e.pending[task], clipRunes(oneLine(reason), 200))
 	}
 	if e.armed {
 		return
@@ -66,23 +77,54 @@ func (e *Evolver) Wake(reason string) {
 		return
 	}
 	e.armed = true
-	e.count++
+	e.gen++
+	gen := e.gen
 	after := e.After
 	if after == nil {
 		after = func(d time.Duration, f func()) { time.AfterFunc(d, f) }
 	}
-	after(e.delay(), e.fire)
+	after(e.delay(), func() { e.fire(gen) })
 }
 
-func (e *Evolver) fire() {
+func (e *Evolver) fire(gen int) {
 	e.mu.Lock()
-	reasons := e.pending
-	e.pending, e.armed = nil, false
-	e.mu.Unlock()
-	if len(reasons) == 0 {
+	if gen != e.gen {
+		e.mu.Unlock()
 		return
 	}
-	e.Submit("这一轮由新反馈触发（不是每日例行轮），先处理这些，再照常看 signals：\n- " + strings.Join(reasons, "\n- "))
+	pending := e.pending
+	e.pending, e.armed = nil, false
+	tasks := make([]string, 0, len(pending))
+	for task := range pending {
+		tasks = append(tasks, task)
+	}
+	sort.Strings(tasks)
+	var due []string
+	for _, task := range tasks {
+		if e.count >= e.perDay() {
+			if e.Logf != nil {
+				e.Logf("evolve: daily cap reached, feedback on %q waits for the daily round", task)
+			}
+			continue
+		}
+		e.count++
+		due = append(due, task)
+	}
+	e.mu.Unlock()
+	for _, task := range due {
+		e.Submit(task, evolveInput(task, pending[task]))
+	}
+}
+
+// evolveInput is the input of a feedback round: one task's, or (task "") the evolution task's own.
+func evolveInput(task string, reasons []string) string {
+	list := "\n- " + strings.Join(reasons, "\n- ")
+	if task == "" {
+		return "这一轮由新反馈触发（不是每日例行轮），先处理这些，再照常看 signals：" + list
+	}
+	return "这一轮由新反馈触发，只进化任务「" + task + "」（单任务进化轮，见 brief「单任务进化轮」）。" +
+		"先跑 $V evolve signals --task " + task + "，只读、只改这个任务的文件（~/.vigil/tasks/" + task + "/），" +
+		"判断原则（owner.md）和别的任务留给例行轮。这次的反馈：" + list
 }
 
 func (e *Evolver) now() time.Time {
@@ -107,9 +149,9 @@ func (e *Evolver) perDay() int {
 }
 
 // wakeEvolve passes feedback to the evolver; reasons are short, the task reads the details from signals.
-func (s *Server) wakeEvolve(reason string) {
+func (s *Server) wakeEvolve(task, reason string) {
 	if s.Evolve != nil && s.Evolve.Task != "" {
-		s.Evolve.Wake(reason)
+		s.Evolve.Wake(task, reason)
 	}
 }
 
@@ -148,6 +190,7 @@ type signalRun struct {
 
 type signalsView struct {
 	Since       time.Time    `json:"since"`
+	Task        string       `json:"task,omitempty"` // set when the signals are narrowed to one task
 	Corrections []Correction `json:"corrections"`
 	// OwnerReplies are what the owner wrote by hand in to-dos' conversations: the draft next to the real reply.
 	OwnerReplies []OwnerReply `json:"owner_replies"`
@@ -155,8 +198,36 @@ type signalsView struct {
 	AfterReplies []Aftermath   `json:"after_replies"`
 	Todos        []signalTodo  `json:"todos"`
 	Runs         []signalRun   `json:"runs"`
-	LedgerDue    []LedgerEntry `json:"ledger_due"`
+	LedgerDue    []ledgerDue   `json:"ledger_due"`
 	Watching     []LedgerEntry `json:"ledger_watching"`
+	// MemoryOver lists tasks whose memory.md (read every round) has outgrown store.MemoryCap.
+	MemoryOver []memoryOver `json:"memory_over"`
+	// Autonomy is the last week's trend: how often the owner had to step in, by day and by kind.
+	Autonomy autonomyView `json:"autonomy"`
+}
+
+type memoryOver struct {
+	Task  string `json:"task"`
+	Bytes int64  `json:"bytes"`
+	Cap   int64  `json:"cap"`
+}
+
+// oversizedMemory lists the tasks whose rules no longer fit the memory cap, largest first.
+func (s *Server) oversizedMemory() []memoryOver {
+	tasks, _ := s.Store.List()
+	out := []memoryOver{}
+	for _, t := range tasks {
+		n, err := s.Store.MemorySize(t.ID)
+		if err != nil {
+			s.logf("memory size %s: %v", t.ID, err)
+			continue
+		}
+		if n > store.MemoryCap {
+			out = append(out, memoryOver{Task: t.ID, Bytes: n, Cap: store.MemoryCap})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Bytes > out[j].Bytes })
+	return out
 }
 
 // signals gathers the feedback since the self-evolution task last finished a round (or ?since=RFC3339).
@@ -165,44 +236,111 @@ func (s *Server) signals(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	view := signalsView{Since: since, LedgerDue: []LedgerEntry{}, Watching: []LedgerEntry{}}
-	if view.Corrections, err = correctionsSince(s.correctionLog(), since); err != nil {
-		return nil, err
+	task := strings.TrimSpace(r.URL.Query().Get("task"))
+	if task != "" {
+		if _, err := s.Store.Get(task); err != nil {
+			return nil, badRequest("没有任务 %s", task)
+		}
 	}
-	view.Corrections = orEmpty(clipCorrections(view.Corrections))
+	return s.signalsFor(since, task)
+}
+
+// signalsFor gathers the feedback since a time, for one task or (task "") for all of them.
+func (s *Server) signalsFor(since time.Time, task string) (signalsView, error) {
+	mine := func(t string) bool { return task == "" || t == task }
+	view := signalsView{Since: since, Task: task, LedgerDue: []ledgerDue{}, Watching: []LedgerEntry{}}
+	corrections, err := correctionsSince(s.correctionLog(), since)
+	if err != nil {
+		return view, err
+	}
+	if task != "" && (s.Mirror == nil || s.Mirror.Task != task) {
+		corrections = nil // corrections are said in Slack, about the task the Slack watch feeds
+	}
+	view.Corrections = orEmpty(clipCorrections(corrections))
 	items, err := s.Inbox.List(true)
 	if err != nil {
-		return nil, err
+		return view, err
 	}
+	items = keep(items, func(it inbox.Item) bool { return mine(it.TaskID) })
 	view.Todos = orEmpty(todoSignals(items, since))
-	if view.OwnerReplies, err = ownerRepliesSince(s.ownerReplies(), since, signalMaxPerSet); err != nil {
-		return nil, err
+	view.Autonomy = autonomyOf(items, s.Now())
+	if err := s.replySignals(&view, since, mine); err != nil {
+		return view, err
 	}
-	view.OwnerReplies = orEmpty(view.OwnerReplies)
-	if view.AfterReplies, err = aftermathSince(s.aftermathLog(), since, signalMaxPerSet); err != nil {
-		return nil, err
+	runs, err := s.runSignals(since)
+	if err != nil {
+		return view, err
 	}
-	view.AfterReplies = orEmpty(view.AfterReplies)
-	if view.Runs, err = s.runSignals(since); err != nil {
-		return nil, err
+	view.Runs = orEmpty(keep(runs, func(r signalRun) bool { return mine(r.Task) }))
+	view.MemoryOver = keep(s.oversizedMemory(), func(m memoryOver) bool { return mine(m.Task) })
+	return view, s.ledgerSignals(&view, mine)
+}
+
+// replySignals adds what the owner wrote by hand and what askers said after an agent reply. A narrowed
+// view reads further back before clipping, so other tasks' entries do not crowd this one's out.
+func (s *Server) replySignals(view *signalsView, since time.Time, mine func(string) bool) error {
+	limit := signalMaxPerSet
+	if view.Task != "" {
+		limit = signalMaxPerSet * 20
 	}
-	view.Runs = orEmpty(view.Runs)
+	owner, err := ownerRepliesSince(s.ownerReplies(), since, limit)
+	if err != nil {
+		return err
+	}
+	view.OwnerReplies = orEmpty(firstN(keep(owner, func(o OwnerReply) bool { return mine(o.Task) }), signalMaxPerSet))
+	after, err := aftermathSince(s.aftermathLog(), since, limit)
+	if err != nil {
+		return err
+	}
+	view.AfterReplies = orEmpty(firstN(keep(after, func(a Aftermath) bool { return mine(a.Task) }), signalMaxPerSet))
+	return nil
+}
+
+// ledgerSignals splits the watched changes into due (measured since the change) and still watching.
+func (s *Server) ledgerSignals(view *signalsView, mine func(string) bool) error {
 	entries, err := s.ledger().list()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	now := s.Now()
 	for _, e := range entries {
-		if e.Status != LedgerWatching {
+		if e.Status != LedgerWatching || !mine(e.Task) {
 			continue
 		}
-		if !e.ReviewAt.After(now) {
-			view.LedgerDue = append(view.LedgerDue, e)
-		} else {
+		if e.ReviewAt.After(now) {
 			view.Watching = append(view.Watching, e)
+			continue
+		}
+		due := ledgerDue{LedgerEntry: e}
+		if e.Metric != "" {
+			after, err := s.measureKind(e.Metric, e.At, now)
+			if err != nil {
+				return err
+			}
+			due.After = &after
+		}
+		view.LedgerDue = append(view.LedgerDue, due)
+	}
+	return nil
+}
+
+// keep returns the elements of xs that ok accepts, in order.
+func keep[T any](xs []T, ok func(T) bool) []T {
+	out := make([]T, 0, len(xs))
+	for _, x := range xs {
+		if ok(x) {
+			out = append(out, x)
 		}
 	}
-	return view, nil
+	return out
+}
+
+// firstN returns at most n leading elements.
+func firstN[T any](xs []T, n int) []T {
+	if len(xs) > n {
+		return xs[:n]
+	}
+	return xs
 }
 
 // orEmpty keeps an empty list a list in JSON ([] rather than null), which agents read more reliably.

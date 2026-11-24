@@ -8,7 +8,7 @@ import (
 	"vigil/internal/task"
 )
 
-func TestTaskListPutsResidentFirstThenSoonestRun(t *testing.T) {
+func TestTaskListPutsTriggeredFirstThenSoonestRun(t *testing.T) {
 	now := time.Unix(1794884400, 0)
 	at := func(d time.Duration) *time.Time { x := now.Add(d); return &x }
 	views := []TaskView{
@@ -25,7 +25,7 @@ func TestTaskListPutsResidentFirstThenSoonestRun(t *testing.T) {
 		got = append(got, v.Task.ID)
 	}
 
-	want := []string{"slack", "disk", "brief", "weekly", "events", "paused"}
+	want := []string{"slack", "events", "disk", "brief", "weekly", "paused"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("order = %v, want %v", got, want)
 	}

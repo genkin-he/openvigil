@@ -34,12 +34,20 @@ func cmdEvolve(args []string) error {
 func evolveSignals(args []string) error {
 	fs := flag.NewFlagSet("evolve signals", flag.ContinueOnError)
 	since := fs.String("since", "", "")
+	task := fs.String("task", "", "只看这个任务的反馈、轮次、账本和北极星")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	path := "/api/evolve/signals"
+	q := url.Values{}
 	if *since != "" {
-		path += "?since=" + url.QueryEscape(*since)
+		q.Set("since", *since)
+	}
+	if *task != "" {
+		q.Set("task", *task)
+	}
+	path := "/api/evolve/signals"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
 	}
 	return getJSON(path)
 }
@@ -55,6 +63,7 @@ func evolveRecord(args []string) error {
 		Backup     string `json:"backup"`
 		Todo       string `json:"todo"`
 		ReviewDays int    `json:"review_days"`
+		Metric     string `json:"metric"`
 	}
 	fs.StringVar(&b.Task, "task", "", "")
 	fs.StringVar(&b.Target, "target", "", "")
@@ -64,6 +73,7 @@ func evolveRecord(args []string) error {
 	fs.StringVar(&b.Backup, "backup", "", "")
 	fs.StringVar(&b.Todo, "todo", "", "")
 	fs.IntVar(&b.ReviewDays, "review-days", 0, "")
+	fs.StringVar(&b.Metric, "metric", "", "待办类别（或 <任务>/<类别>）：记下改动前 7 天的处理情况作为基线")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

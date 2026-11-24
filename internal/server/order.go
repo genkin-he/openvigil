@@ -6,12 +6,12 @@ import (
 	"vigil/internal/task"
 )
 
-// Task list order: resident tasks first, then scheduled tasks by their next run (soonest first), then tasks
-// that only wait for a trigger, then paused ones. Ties keep the store's order.
+// Task list order: triggered tasks first (resident ones, then those that only wait for a trigger), then
+// scheduled tasks by their next run (soonest first), then paused ones. Ties keep the store's order.
 const (
 	rankResident = iota
-	rankScheduled
 	rankTriggered
+	rankScheduled
 	rankPaused
 )
 

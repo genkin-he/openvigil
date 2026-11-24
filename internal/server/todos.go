@@ -248,7 +248,7 @@ func (s *Server) todoClose(_ http.ResponseWriter, r *http.Request) (any, error) 
 	if err := decode(r, &b); err != nil {
 		return nil, err
 	}
-	it, err := s.Inbox.Close(r.PathValue("id"), b.Outcome)
+	it, err := s.Inbox.CloseByTask(r.PathValue("id"), b.Outcome)
 	if err != nil {
 		return nil, todoErr(err)
 	}
@@ -277,6 +277,9 @@ func todoInput(it inbox.Item, mode, bin string) string {
 		if strings.TrimSpace(kv[1]) != "" {
 			b.WriteString(kv[0] + "：" + kv[1] + "\n")
 		}
+	}
+	if it.Status == inbox.StatusAnswered && strings.TrimSpace(it.Outcome) != "" {
+		b.WriteString("这条待办之前被你结了（" + it.Outcome + "），但我还是做了决定，以我这次的决定为准；要撤回或改正之前做过的，一并处理。\n")
 	}
 	if mode == TodoSend {
 		b.WriteString("请把下面这段原文一字不改地发到回复目标（例如 Slack 线程用 slack_send_message 带 thread_ts；别的平台用对应的评论 / 回复工具）：\n" + it.Answer + "\n")

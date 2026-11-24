@@ -9,18 +9,29 @@ import (
 	"time"
 
 	"vigil/internal/inbox"
+	"vigil/internal/store"
 )
 
 type fakeEvolve struct {
 	mu     sync.Mutex
 	inputs []string
+	tasks  []string // the task each round was about ("" for a round over all tasks)
 	timers []func()
+	delays []time.Duration
 }
 
 func (f *fakeEvolve) evolver(task string) *Evolver {
 	return &Evolver{Task: task, PerDay: 2,
-		Submit: func(in string) { f.mu.Lock(); f.inputs = append(f.inputs, in); f.mu.Unlock() },
-		After:  func(_ time.Duration, fn func()) { f.mu.Lock(); f.timers = append(f.timers, fn); f.mu.Unlock() }}
+		Submit: func(task, in string) {
+			f.mu.Lock()
+			f.tasks, f.inputs = append(f.tasks, task), append(f.inputs, in)
+			f.mu.Unlock()
+		},
+		After: func(d time.Duration, fn func()) {
+			f.mu.Lock()
+			f.timers, f.delays = append(f.timers, fn), append(f.delays, d)
+			f.mu.Unlock()
+		}}
 }
 
 func (f *fakeEvolve) fireAll() {
@@ -36,8 +47,8 @@ func (f *fakeEvolve) fireAll() {
 func TestEvolverBatchesABurstAndCapsRoundsPerDay(t *testing.T) {
 	f := &fakeEvolve{}
 	e := f.evolver("evo")
-	e.Wake("纠错 A")
-	e.Wake("纠错 B") // same burst: no second timer
+	e.Wake("slack", "纠错 A")
+	e.Wake("slack", "纠错 B") // same burst: no second timer
 	if len(f.timers) != 1 {
 		t.Fatalf("timers = %d", len(f.timers))
 	}
@@ -45,12 +56,43 @@ func TestEvolverBatchesABurstAndCapsRoundsPerDay(t *testing.T) {
 	if len(f.inputs) != 1 || !strings.Contains(f.inputs[0], "纠错 A") || !strings.Contains(f.inputs[0], "纠错 B") {
 		t.Fatalf("inputs = %q", f.inputs)
 	}
-	e.Wake("C")
+	e.Wake("slack", "C")
 	f.fireAll()
-	e.Wake("D") // third round today: over the cap, waits for the daily round
+	e.Wake("slack", "D") // third round today: over the cap, waits for the daily round
 	f.fireAll()
 	if len(f.inputs) != 2 {
 		t.Fatalf("rounds = %d, want the cap of 2", len(f.inputs))
+	}
+}
+
+func TestEachTaskWithFeedbackGetsItsOwnEvolutionRound(t *testing.T) {
+	f := &fakeEvolve{}
+	e := f.evolver("evo")
+	e.PerDay = 8
+	e.Wake("slack", "待办 td-1 你改了建议回复")
+	e.Wake("tracker", "待办 td-2 你改成了指示")
+	e.Wake("slack", "代回后对方说不对")
+	e.Wake("evo", "你改了自进化提的规则卡") // about the evolution task itself: a round over everything
+	if len(f.timers) != 1 {
+		t.Fatalf("timers = %d, want one burst", len(f.timers))
+	}
+	f.fireAll()
+	got := map[string]string{}
+	for i, task := range f.tasks {
+		got[task] = f.inputs[i]
+	}
+	if len(got) != 3 {
+		t.Fatalf("rounds = %v", f.tasks)
+	}
+	if in := got["slack"]; !strings.Contains(in, "td-1") || !strings.Contains(in, "代回后") || strings.Contains(in, "td-2") ||
+		!strings.Contains(in, "evolve signals --task slack") {
+		t.Fatalf("slack round = %q", in)
+	}
+	if in := got["tracker"]; !strings.Contains(in, "td-2") || strings.Contains(in, "td-1") {
+		t.Fatalf("tracker round = %q", in)
+	}
+	if in, ok := got[""]; !ok || !strings.Contains(in, "规则卡") {
+		t.Fatalf("the evolution task's own feedback should go to a round over everything: %v", got)
 	}
 }
 
@@ -96,7 +138,7 @@ func TestRevokeTakesTheLineOutAndAllowsResuggestionLater(t *testing.T) {
 	now := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
 	s.Now = func() time.Time { return now }
 	rule := "我已授权：「问进度」类事情直接回"
-	if err := s.Store.AppendMemory("slack", []string{rule, "别的记忆"}, now); err != nil {
+	if err := s.Store.AppendRules("slack", []string{rule, "决策：别的记忆"}, now); err != nil {
 		t.Fatal(err)
 	}
 	accepted, _, _ := s.Inbox.Add(inbox.Item{TaskID: "slack", Ref: "rule:slack:问进度:as_is", Title: "规则建议", Reply: rule})
@@ -236,5 +278,57 @@ func TestPickedChoiceDoesNotWakeEvolutionButTypedInstructionDoes(t *testing.T) {
 	s.Engine.Wait()
 	if len(f.timers) != 1 {
 		t.Fatal("a typed instruction instead of the suggested reply did not wake the evolution task")
+	}
+}
+
+func TestSignalsFlagMemoryOverItsCap(t *testing.T) {
+	s, h := newServer(t)
+	do(h, "POST", "/api/tasks", applyJSON("id: big\nname: Big\ntrigger: {kind: manual}\n"), true)
+	do(h, "POST", "/api/tasks", applyJSON("id: small\nname: Small\ntrigger: {kind: manual}\n"), true)
+	rule := "纠错：" + strings.Repeat("长", 400)
+	for range store.MemoryCap / len(rule) {
+		if err := s.Store.AppendRules("big", []string{rule}, s.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = s.Store.AppendRules("big", []string{rule, rule}, s.Now())
+	_ = s.Store.AppendMemory("small", []string{"[x] " + strings.Repeat("知", 20000)}, s.Now()) // facts do not count
+
+	_, env := do(h, "GET", "/api/evolve/signals?since=2000-01-01T00:00:00Z", "", true)
+	view := decodeData[signalsView](t, env.Data)
+	if len(view.MemoryOver) != 1 || view.MemoryOver[0].Task != "big" || view.MemoryOver[0].Bytes <= store.MemoryCap {
+		t.Fatalf("memory_over = %+v", view.MemoryOver)
+	}
+}
+
+func TestSignalsCanBeNarrowedToOneTask(t *testing.T) {
+	s, h := newServer(t)
+	do(h, "POST", "/api/tasks", applyJSON("id: slack\nname: Slack\ntrigger: {kind: manual}\n"), true)
+	do(h, "POST", "/api/tasks", applyJSON("id: other\nname: Other\ntrigger: {kind: manual}\n"), true)
+	for _, task := range []string{"slack", "other"} {
+		it, _, _ := s.Inbox.Add(inbox.Item{TaskID: task, Kind: "问数据", Title: task + "：数据？", Reply: "是 3 条", Ref: task + ":1"})
+		if _, err := s.AnswerTodo(it.ID, TodoSend, "是 5 条"); err != nil {
+			t.Fatal(err)
+		}
+		do(h, "POST", "/api/evolve/ledger", `{"task":"`+task+`","target":"m","change":"c","why":"w","expect":"e"}`, true)
+	}
+	s.Engine.Wait()
+
+	if rec, _ := do(h, "GET", "/api/evolve/signals?since=2000-01-01T00:00:00Z&task=ghost", "", true); rec.Code != 400 {
+		t.Fatalf("unknown task = %d", rec.Code)
+	}
+	_, env := do(h, "GET", "/api/evolve/signals?since=2000-01-01T00:00:00Z&task=slack", "", true)
+	v := decodeData[signalsView](t, env.Data)
+	if v.Task != "slack" || len(v.Todos) != 1 || v.Todos[0].Task != "slack" || len(v.Watching) != 1 || v.Watching[0].Task != "slack" {
+		t.Fatalf("narrowed signals = %+v", v)
+	}
+	for _, d := range v.Autonomy.Days {
+		if d.Task != "slack" {
+			t.Fatalf("autonomy leaks another task: %+v", v.Autonomy.Days)
+		}
+	}
+	_, env = do(h, "GET", "/api/evolve/signals?since=2000-01-01T00:00:00Z", "", true)
+	if all := decodeData[signalsView](t, env.Data); len(all.Todos) != 2 || len(all.Watching) != 2 {
+		t.Fatalf("unfiltered signals = %d todos, %d changes", len(all.Todos), len(all.Watching))
 	}
 }

@@ -81,3 +81,69 @@ func TestAgentsAreToldToOfferFixedChoices(t *testing.T) {
 		t.Fatalf("todo guide does not explain choices:\n%s", out)
 	}
 }
+
+func TestKnowledgeTopicsAreListedNotInlined(t *testing.T) {
+	c := ctx(task.ModeHeadless)
+	if strings.Contains(Build(c), "/v/tasks/demo/knowledge/") {
+		t.Fatal("no knowledge yet, but the prompt lists some")
+	}
+	c.Knowledge = []Topic{{Name: "misc", Entries: 3, Bytes: 600}}
+	if p := Build(c); !strings.Contains(p, "整份读一遍") {
+		t.Fatalf("a small knowledge base is not read whole:\n%s", p)
+	}
+	c.Knowledge = []Topic{{Name: "user-service", Entries: 23, Bytes: 9000}, {Name: "monitor", Entries: 4, Bytes: 800}}
+	p := Build(c)
+	if strings.Contains(p, "整份读一遍") {
+		t.Fatal("a large knowledge base is read whole")
+	}
+	for _, want := range []string{"/v/tasks/demo/knowledge/", "user-service.md（23 条）", "monitor.md（4 条）", "[主题]", "先读对应文件"} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, p)
+		}
+	}
+}
+
+func TestChoicesAreToldToRespectTheOwnersPrinciples(t *testing.T) {
+	c := ctx(task.ModeHeadless)
+	c.OwnerDoc = "/v/owner.md"
+	p := Build(c)
+	for _, want := range []string{"违背", "/v/owner.md", "完整动作", "转产品定"} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("choice guidance missing %q", want)
+		}
+	}
+	if p := Build(ctx(task.ModeHeadless)); strings.Contains(p, "违背已定原则") {
+		t.Fatal("no principles file, yet the choices are told to keep to it")
+	}
+}
+
+func TestReplyGuidanceDefersToTheBrief(t *testing.T) {
+	p := Build(ctx(task.ModeHeadless))
+	if !strings.Contains(p, "什么时候带以 brief 为准") {
+		t.Fatal("the shared --reply guidance does not defer to the brief")
+	}
+	if strings.Contains(p, "--reply \"<可以直接发出去的建议回复；拿不准或要我拍板的不带>\"") {
+		t.Fatal("the shared guidance still forbids drafts outright, overruling briefs that ask for them")
+	}
+}
+
+// A quarter of the to-dos the owner answered by typing despite choices were "go check X first"
+// (does the field exist, was it fixed before, what did the PM last say): facts the task could
+// have looked up before asking.
+func TestDecisionsAreRaisedOnlyAfterTheCheckableFacts(t *testing.T) {
+	p := Build(ctx(task.ModeHeadless))
+	for _, want := range []string{"建要我拍板的待办之前", "之前有没有做过 / 修过", "最新回复", "问谁", "不要把「先查一下」留给我"} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("decision guidance missing %q", want)
+		}
+	}
+}
+
+func TestOthersDecidingDoesNotCloseTheOwnersOpenTodo(t *testing.T) {
+	p := Build(ctx(task.ModeHeadless))
+	for _, want := range []string{"别人先拍板", "和待办里给我的选项或拟稿不完全一样", "不要结掉", "todo note", "不要另开"} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("guidance on others deciding missing %q", want)
+		}
+	}
+}

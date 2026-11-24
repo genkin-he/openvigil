@@ -1,6 +1,9 @@
 package server
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -77,5 +80,57 @@ func TestRecheckingTheNetworkTodoRerunsAtOnce(t *testing.T) {
 	runs, _ := s.Store.Runs("slack", 0)
 	if len(runs) < 2 {
 		t.Fatalf("not rerun: %+v", runs)
+	}
+}
+
+// Nothing else may run for hours while the network is blocked; a probe that sees the edge let
+// requests through again re-runs the lost rounds without waiting for the owner to click 复查.
+func TestAProbeThatGetsThroughRerunsTheLostRounds(t *testing.T) {
+	s, h := newServer(t)
+	do(h, "POST", "/api/tasks", applyJSON("id: brief\nname: Brief\nenabled: true\ntrigger: {kind: manual}\n"), true)
+
+	reachable := false
+	s.net.probe = func(context.Context) bool { return reachable }
+	s.probeNet(context.Background()) // nothing lost: nothing to do
+	finishRun(t, s, "r1", "brief", "fail", "早报", blockedErr)
+
+	s.probeNet(context.Background())
+	if _, ok := netTodo(t, s); !ok {
+		t.Fatal("closed while the edge still blocks")
+	}
+	reachable = true
+	s.probeNet(context.Background())
+	s.Engine.Wait()
+	if _, ok := netTodo(t, s); ok {
+		t.Fatal("still open after the probe got through")
+	}
+	runs, _ := s.Store.Runs("brief", 0)
+	if len(runs) < 2 || runs[0].Trigger != runner.ByRetry || !strings.Contains(runs[0].Input, "早报") {
+		t.Fatalf("lost round not re-run: %+v", runs)
+	}
+}
+
+func TestAnthropicReachableReadsTheEdgeAnswer(t *testing.T) {
+	cases := []struct {
+		code int
+		body string
+		want bool
+	}{
+		{401, `{"type":"error","error":{"type":"authentication_error"}}`, true},
+		{403, `{"error":{"message":"Request blocked before it reached Anthropic's API"},"api_error_status":"network_edge_blocked"}`, false},
+		{403, `<title>Attention Required! | Cloudflare</title>`, false},
+	}
+	for _, c := range cases {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(c.code)
+			_, _ = w.Write([]byte(c.body))
+		}))
+		if got := edgeReachable(context.Background(), srv.URL); got != c.want {
+			t.Errorf("%d %q: got %v", c.code, c.body, got)
+		}
+		srv.Close()
+	}
+	if edgeReachable(context.Background(), "http://127.0.0.1:1") {
+		t.Error("an unreachable host counted as reachable")
 	}
 }

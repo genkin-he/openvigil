@@ -6,7 +6,7 @@ import { openForge } from "./forge.js";
 import { t, applyStatic } from "./i18n.js";
 import { todoCards, followList } from "./todos.js";
 import { notifyDesktop, askNotifyPermission } from "./notify.js";
-import { maybeWelcome, maybeTabsTour, replayTour } from "./tour.js";
+import { maybeWelcome, maybeTabsTour, maybeConsoleTour, replayTour, startConsoleTour } from "./tour.js";
 import { initSettings, getPrefs, setPrefs } from "./settings.js";
 import { exportStarted } from "./migrate.js";
 import { keepFocus, hasDraftIn } from "./drafts.js";
@@ -253,7 +253,7 @@ function taskRow(v, i, compact = false) {
       h("div", { class: "task-name" }, h("span", { text: v.task.name }),
         h("i", { class: `chip${v.task.mode === "resident" ? " resident" : ""}`, text: t(v.task.mode === "resident" ? "mode.resident" : "mode.headless") }),
         v.jobs?.length ? h("i", { class: "chip job", title: v.jobs.map((j) => j.title).join("\n"), text: t("task.jobs", { n: v.jobs.length }) }) : null,
-        v.proposals ? h("i", { class: "chip proposal", title: t("task.proposals.title"), text: t("task.proposals", { n: v.proposals }) }) : null),
+        v.proposals ? h("i", { class: "proposal-dot", role: "img", title: t("task.proposals", { n: v.proposals }), "aria-label": t("task.proposals", { n: v.proposals }) }) : null),
       h("p", { class: "task-last" },
         last ? h("time", { text: hm(new Date(last.started_at)) }) : null,
         last ? plainText(last.summary) : t("task.never"))),
@@ -321,7 +321,7 @@ const refresh = debounce(() => {
 function init() {
   applyStatic();
   initSettings($("settings"), {
-    onChange: renderTasks, onTour: () => replayTour(state.views),
+    onChange: renderTasks, onTour: () => replayTour(state.views), onConsoleTour: startConsoleTour,
     onExported: renderHeadline,
   });
   document.addEventListener("click", askNotifyPermission, { once: true });
@@ -354,6 +354,7 @@ function init() {
   load().then(() => {
     route();
     maybeWelcome(state.views);
+    maybeConsoleTour(state.views);
   });
 }
 

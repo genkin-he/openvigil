@@ -32,10 +32,13 @@ func TestOldRoutineMemoryMovesToArchiveRulesStay(t *testing.T) {
 	}
 
 	mem, _ := s.ReadDoc("a", DocMemory)
-	for _, keep := range []string{"# 长期记忆", "决策：问进度类直接回", "纠错：群聊没 @ 我", "我已授权：「问接口」", "没有日期的一条", "最近的流水", "今天的新流水"} {
+	for _, keep := range []string{"# 长期记忆", "决策：问进度类直接回", "纠错：群聊没 @ 我", "我已授权：「问接口」", "没有日期的一条", "最近的流水"} {
 		if !strings.Contains(mem, keep) {
 			t.Errorf("memory lost %q:\n%s", keep, mem)
 		}
+	}
+	if topics, _ := s.Knowledge("a"); len(topics) != 1 || topics[0].Topic != "misc" || topics[0].Entries != 1 {
+		t.Errorf("a new untagged note goes to knowledge/misc.md, got %v", topics)
 	}
 	for _, gone := range []string{"某线程已回复", "续行属于上一条", "缓存 TTL"} {
 		if strings.Contains(mem, gone) {

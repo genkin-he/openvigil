@@ -87,9 +87,9 @@ func TestRefuseMovedOutLetsAFreshHomeStart(t *testing.T) {
 
 func TestNotPackedSkipsPathsTheExtrasCover(t *testing.T) {
 	h := "/h"
-	need := []string{filepath.Join(h, ".tidy", "watch"), filepath.Join(h, "LB", "repo")}
-	got := NotPacked(need, []string{filepath.Join(h, ".tidy", "watch")})
-	if !slices.Equal(got, []string{filepath.Join(h, "LB", "repo")}) {
+	need := []string{filepath.Join(h, ".mytool", "watch"), filepath.Join(h, "work", "repo")}
+	got := NotPacked(need, []string{filepath.Join(h, ".mytool", "watch")})
+	if !slices.Equal(got, []string{filepath.Join(h, "work", "repo")}) {
 		t.Fatalf("got %v", got)
 	}
 }

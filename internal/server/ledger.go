@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"vigil/internal/inbox"
 )
 
 // The change ledger: every change the self-evolution task makes (or gets approved) is written down with
@@ -22,6 +24,7 @@ const (
 	ledgerDefaultDay = 7
 	ledgerMaxDays    = 60
 	ledgerFieldLen   = 2000
+	ledgerPerDay     = 5 // reviews due on one day at most; more move to the next day, so none are waved through in a pile
 )
 
 // LedgerEntry is one change and its verdict.
@@ -40,6 +43,16 @@ type LedgerEntry struct {
 	Verdict  string    `json:"verdict,omitempty"`
 	Closed   time.Time `json:"closed_at,omitzero"`
 	Ref      string    `json:"ref,omitempty"` // for a suggestion held back by replay: its to-do ref, so it is not replayed again soon
+	// Metric names the to-do kind ("<task>/<kind>") the change should move; Baseline is that kind's week
+	// before the change, so the review compares numbers instead of impressions.
+	Metric   string         `json:"metric,omitempty"`
+	Baseline *autonomyCount `json:"baseline,omitempty"`
+}
+
+// ledgerDue is a change whose review is due, with its metric measured since the change.
+type ledgerDue struct {
+	LedgerEntry
+	After *autonomyCount `json:"after,omitempty"`
 }
 
 type ledgerStore = recordLog[LedgerEntry]
@@ -71,6 +84,7 @@ type ledgerBody struct {
 	Backup     string `json:"backup"`
 	Todo       string `json:"todo"`
 	ReviewDays int    `json:"review_days"`
+	Metric     string `json:"metric"` // "<kind>" of the task, or "<task>/<kind>"
 }
 
 func (s *Server) ledgerAdd(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -94,9 +108,23 @@ func (s *Server) ledgerAdd(_ http.ResponseWriter, r *http.Request) (any, error) 
 		return nil, badRequest("review_days 要在 1～%d 之间", ledgerMaxDays)
 	}
 	now := s.Now()
+	reviewAt, err := s.spreadReview(now.Add(time.Duration(days) * 24 * time.Hour))
+	if err != nil {
+		return nil, err
+	}
 	e := LedgerEntry{ID: "ev-" + randHex(3), At: now, Task: b.Task, Target: clipRunes(b.Target, 200),
 		Change: clipRunes(b.Change, ledgerFieldLen), Why: clipRunes(b.Why, ledgerFieldLen), Expect: clipRunes(b.Expect, ledgerFieldLen),
-		Backup: clipRunes(b.Backup, 300), Todo: clipRunes(b.Todo, 40), ReviewAt: now.Add(time.Duration(days) * 24 * time.Hour), Status: LedgerWatching}
+		Backup: clipRunes(b.Backup, 300), Todo: clipRunes(b.Todo, 40), ReviewAt: reviewAt, Status: LedgerWatching}
+	if m := strings.TrimSpace(b.Metric); m != "" {
+		if !strings.Contains(m, "/") {
+			m = b.Task + "/" + m
+		}
+		base, err := s.measureKind(m, now.AddDate(0, 0, -autonomyDays), now)
+		if err != nil {
+			return nil, err
+		}
+		e.Metric, e.Baseline = clipRunes(m, 120), &base
+	}
 	if err := s.ledger().add(e); err != nil {
 		return nil, err
 	}
@@ -139,4 +167,43 @@ func randHex(n int) string {
 		return fmt.Sprintf("%x", time.Now().UnixNano())[:2*n]
 	}
 	return hex.EncodeToString(b)
+}
+
+// spreadReview moves a review to the next day with room, so at most ledgerPerDay come due together.
+func (s *Server) spreadReview(at time.Time) (time.Time, error) {
+	all, err := s.ledger().list()
+	if err != nil {
+		return at, err
+	}
+	perDay := map[string]int{}
+	for _, e := range all {
+		if e.Status == LedgerWatching {
+			perDay[e.ReviewAt.In(at.Location()).Format(time.DateOnly)]++
+		}
+	}
+	for perDay[at.Format(time.DateOnly)] >= ledgerPerDay {
+		at = at.AddDate(0, 0, 1)
+	}
+	return at, nil
+}
+
+// measureKind counts how to-dos of one kind ("<task>/<kind>") created in (from, to] were settled.
+func (s *Server) measureKind(metric string, from, to time.Time) (autonomyCount, error) {
+	items, err := s.Inbox.List(true)
+	if err != nil {
+		return autonomyCount{}, err
+	}
+	return measureItems(items, metric, from, to), nil
+}
+
+// measureItems is measureKind over to-dos already read.
+func measureItems(items []inbox.Item, metric string, from, to time.Time) autonomyCount {
+	task, kind, _ := strings.Cut(metric, "/")
+	var c autonomyCount
+	for _, it := range items {
+		if it.TaskID == task && it.Kind == kind && it.Created.After(from) && !it.Created.After(to) {
+			c.add(it)
+		}
+	}
+	return c
 }

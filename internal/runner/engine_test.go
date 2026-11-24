@@ -117,10 +117,10 @@ func TestHeadlessRunRecordsResultMemoryAndSession(t *testing.T) {
 	if len(runs) != 1 || runs[0].Status != store.StatusOK || runs[0].Summary != "同步了 3 条" || !runs[0].Structured {
 		t.Fatalf("runs = %+v", runs)
 	}
-	mem, _ := h.s.ReadDoc("a", store.DocMemory)
+	topics, _ := h.s.Knowledge("a") // the result's memory note is a fact: it lands in the knowledge files
 	st, _ := h.s.State("a")
-	if !strings.Contains(mem, "上次同步到 #42") || st.SessionID != "s1" || st.SessionRuns != 1 || st.RunCount != 1 {
-		t.Fatalf("mem=%q state=%+v", mem, st)
+	if len(topics) != 1 || topics[0].Entries != 1 || st.SessionID != "s1" || st.SessionRuns != 1 || st.RunCount != 1 {
+		t.Fatalf("knowledge=%+v state=%+v", topics, st)
 	}
 }
 
@@ -320,6 +320,48 @@ func TestDeniedOperationsBecomeADecision(t *testing.T) {
 	}
 }
 
+// An operation already allowed for the task and still refused was stopped by something an allow rule cannot
+// lift (the owner's own ask rules, e.g. every --env prod command): offering "allow and re-run" would ask the
+// same question forever (the Slack task 11-23 17:33 / 18:18 picked "永久放行" for Bash(deploycli:*), 11-24 09:50
+// was refused again) and re-run a job that already replied on Slack. The round keeps its own result and says
+// what was refused.
+func TestDenialsAnAllowRuleCannotLiftAreNotAsked(t *testing.T) {
+	h := newHarness(t, exec.Outcome{FinalText: okBlock, Denied: []string{"Bash(deploycli:*)"}})
+	tk := manual("g")
+	tk.Agent.AllowedTools = []string{"Bash(deploycli:*)"}
+	h.put(t, tk)
+	r := h.run(Request{TaskID: "g", Trigger: ByManual})[0]
+	if r.Status != store.StatusOK || r.Question != "" || len(r.Options) != 0 {
+		t.Fatalf("a refusal no allow rule can lift must not become a decision: %+v", r)
+	}
+	if !strings.Contains(r.Summary, "Bash(deploycli:*)") || !strings.Contains(r.Summary, "确认规则") {
+		t.Fatalf("the summary must still say what was refused and why: %q", r.Summary)
+	}
+	if len(r.Denied) != 1 {
+		t.Fatalf("the refusal stays on the record: %+v", r.Denied)
+	}
+}
+
+func TestOnlyDenialsAnAllowRuleCanLiftAreAsked(t *testing.T) {
+	h := newHarness(t, exec.Outcome{FinalText: okBlock, Denied: []string{"Bash(deploycli:*)", "Bash(touch:*)"}})
+	tk := manual("m2")
+	tk.Agent.AllowedTools = []string{"Bash(deploycli:*)"}
+	h.put(t, tk)
+	r := h.run(Request{TaskID: "m2", Trigger: ByManual})[0]
+	if r.Status != store.StatusNeedsYou || !strings.Contains(r.Question, "Bash(touch:*)") || strings.Contains(r.Question, "Bash(deploycli:*)") {
+		t.Fatalf("only the liftable refusal is asked about: %+v", r)
+	}
+}
+
+func TestARefusalAfterAOneOffAllowIsNotAskedAgain(t *testing.T) {
+	h := newHarness(t, exec.Outcome{FinalText: okBlock, Denied: []string{"Bash(touch:*)"}})
+	h.put(t, manual("o"))
+	r := h.run(Request{TaskID: "o", Trigger: ByAnswer, AllowTools: []string{"Bash(touch:*)"}})[0]
+	if r.Status != store.StatusOK || r.Question != "" {
+		t.Fatalf("allowed once and refused anyway must not ask again: %+v", r)
+	}
+}
+
 func TestGUITaskWaitsForOwnerToStepAway(t *testing.T) {
 	h := newHarness(t, exec.Outcome{FinalText: okBlock})
 	idleFor := time.Duration(0)
@@ -479,5 +521,38 @@ func TestRunsReadTheOwnersPrinciplesOnceThereAreAny(t *testing.T) {
 	h.run(Request{TaskID: "a", Trigger: ByManual})
 	if !strings.Contains(h.h.reqs[1].Prompt, h.e.cfg.Store.OwnerPath()) {
 		t.Fatal("prompt does not point at the principles")
+	}
+}
+
+func TestACommandBlockedOnlyForHowItIsWrittenIsRetriedNotAsked(t *testing.T) {
+	h := newHarness(t,
+		exec.Outcome{SessionID: "s1", FinalText: okBlock, Denied: []string{"Bash(cd:*)", "Bash(set:*)"}, CostUSD: 0.3},
+		exec.Outcome{SessionID: "s1", FinalText: okBlock, CostUSD: 0.5})
+	h.put(t, manual("d"))
+	runs := h.run(Request{TaskID: "d", Trigger: ByManual})
+	r := runs[0]
+	if r.Status != store.StatusOK || r.Question != "" || len(r.Denied) != 0 {
+		t.Fatalf("a shape-only block was put to the owner: %+v", r)
+	}
+	if len(h.h.reqs) != 2 {
+		t.Fatalf("headless runs = %d, want one retry", len(h.h.reqs))
+	}
+	again := h.h.reqs[1]
+	if again.ResumeSession != "s1" || !strings.Contains(again.Prompt, "Bash(cd:*)") || !strings.Contains(again.Prompt, "不要重做") {
+		t.Fatalf("the retry must continue the same session and say how to write it: %+v", again)
+	}
+	if r.CostUSD < 0.49 || r.CostUSD > 0.51 { // the resumed session reports its total
+		t.Fatalf("cost = %v", r.CostUSD)
+	}
+}
+
+func TestABlockThatIsAboutWhatTheCommandDoesStillGoesToTheOwner(t *testing.T) {
+	h := newHarness(t,
+		exec.Outcome{SessionID: "s1", FinalText: okBlock, Denied: []string{"Bash(cd:*)", "Bash(git:*)"}},
+		exec.Outcome{SessionID: "s1", FinalText: okBlock})
+	h.put(t, manual("d"))
+	r := h.run(Request{TaskID: "d", Trigger: ByManual})[0]
+	if r.Status != store.StatusNeedsYou || len(h.h.reqs) != 1 {
+		t.Fatalf("a git block was retried instead of asked: %+v (runs %d)", r, len(h.h.reqs))
 	}
 }

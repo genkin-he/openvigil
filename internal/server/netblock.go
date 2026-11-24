@@ -3,9 +3,12 @@ package server
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"vigil/internal/runner"
 	"vigil/internal/store"
@@ -17,7 +20,9 @@ import (
 // were lost are run again once a run gets through (or the owner says it is fixed).
 const (
 	netBlockedRef  = "net:blocked"
-	netBlockedKeep = 20 // lost rounds remembered for a re-run; older ones are only counted
+	netBlockedKeep = 20              // lost rounds remembered for a re-run; older ones are only counted
+	netProbeEvery  = 3 * time.Minute // how often a blocked network is checked while nothing else runs
+	netProbeURL    = "https://api.anthropic.com/v1/models"
 	netRerunNote   = "（这一轮之前因为网络被拦没跑完，现在重跑。先确认上次有没有已经做过的动作，别重复发消息、别重复建待办。）\n"
 )
 
@@ -29,19 +34,24 @@ type netLost struct {
 }
 
 type netBlock struct {
-	mu   sync.Mutex
-	lost []netLost
-	more int // lost rounds beyond netBlockedKeep
+	mu    sync.Mutex
+	lost  []netLost
+	more  int                        // lost rounds beyond netBlockedKeep
+	probe func(context.Context) bool // nil: ask Anthropic's edge (tests replace it)
 }
 
 // NetWatchLoop follows finished runs for a blocked network until ctx ends.
 func (s *Server) NetWatchLoop(ctx context.Context) {
 	events, stop := s.Engine.Hub().Subscribe()
 	defer stop()
+	tick := time.NewTicker(netProbeEvery)
+	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-tick.C:
+			s.probeNet(ctx)
 		case ev, ok := <-events:
 			if !ok {
 				return
@@ -82,10 +92,47 @@ func (s *Server) noteRunForNet(ev runner.Event) {
 		nb.mu.Unlock()
 		if err := s.raiseSystem(netBlockedRef, "网络被拦：Claude 的请求被 Anthropic 挡下",
 			"代理 / VPN 当前的出口地区或节点被拒（403 network_edge_blocked）。换一个支持的地区或节点，"+
-				"然后点「复查」立刻重跑丢掉的几轮；不点的话，下一轮跑通时也会自动重跑。", summary); err != nil {
+				"然后点「复查」立刻重跑丢掉的几轮；不点也行，Vigil 每 3 分钟探一次，网络一通就自动重跑。", summary); err != nil {
 			s.logf("net blocked: raise to-do: %v", err)
 		}
 	}
+}
+
+// probeNet checks a blocked network directly: hours can pass without any run that would show it
+// is back (11-23 the morning brief waited 08:04→09:50 for the owner to click 复查).
+func (s *Server) probeNet(ctx context.Context) {
+	nb := &s.net
+	nb.mu.Lock()
+	blocked := len(nb.lost) > 0 || nb.more > 0
+	probe := nb.probe
+	nb.mu.Unlock()
+	if !blocked {
+		return
+	}
+	if probe == nil {
+		probe = func(ctx context.Context) bool { return edgeReachable(ctx, netProbeURL) }
+	}
+	if probe(ctx) {
+		s.netRecovered("网络恢复了（探测到 Anthropic 不再拦截）")
+	}
+}
+
+// edgeReachable reports whether a request to url gets past Anthropic's edge: any answer except the
+// edge's block page counts (an unauthenticated call gets 401); no answer at all does not.
+func edgeReachable(ctx context.Context, url string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	return !netBlockedText.Match(body)
 }
 
 func (nb *netBlock) summaryLocked() string {

@@ -197,8 +197,8 @@ func (s *Server) keepAftermath(a Aftermath) {
 		}
 	}
 	if a.Verdict == VerdictPushback && prev.Verdict != VerdictPushback {
-		s.wakeEvolve("代回「" + clipRunes(oneLine(a.Question), 60) + "」后，对方说「" +
-			clipRunes(oneLine(strings.Join(a.Followups, " ")), 80) + "」")
+		s.wakeEvolve(a.Task, "代回「"+clipRunes(oneLine(a.Question), 60)+"」后，对方说「"+
+			clipRunes(oneLine(strings.Join(a.Followups, " ")), 80)+"」")
 	}
 }
 
