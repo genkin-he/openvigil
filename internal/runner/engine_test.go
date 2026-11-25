@@ -556,3 +556,21 @@ func TestABlockThatIsAboutWhatTheCommandDoesStillGoesToTheOwner(t *testing.T) {
 		t.Fatalf("a git block was retried instead of asked: %+v (runs %d)", r, len(h.h.reqs))
 	}
 }
+
+// 11-25 09:34 a chat-watch turn ended on a blocked network and was recorded ok with the screen as its
+// summary: no error, so the blocked-network to-do and the re-run after recovery never happened.
+func TestResidentTurnEndingOnAnAPIErrorFails(t *testing.T) {
+	h := newHarness(t, exec.Outcome{})
+	h.r.out = &resident.Outcome{FinalText: "  回复小王\n\n⏺ API Error: Request blocked before it reached Anthropic's API (HTTP 403) · check your VPN\n  or network and retry\n\n❯ Once fixed, resend your message\n"}
+	tk := manual("r")
+	tk.Mode = task.ModeResident
+	h.put(t, tk)
+	h.run(Request{TaskID: "r", Trigger: ByStream, Input: "回复小王"})
+	runs, _ := h.s.Runs("r", 0)
+	if runs[0].Status != store.StatusFail || !strings.Contains(runs[0].Error, "Request blocked before it reached Anthropic") {
+		t.Fatalf("run = %s %q", runs[0].Status, runs[0].Error)
+	}
+	if strings.Contains(runs[0].Summary, "回复小王") {
+		t.Fatalf("summary is the screen: %q", runs[0].Summary)
+	}
+}

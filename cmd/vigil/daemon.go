@@ -175,7 +175,7 @@ func cmdDaemon(_ []string) error {
 	}
 	srv.Replayer = replay.Runner{Bin: cfg.ClaudeBin, Model: cfg.ReplayModel}
 	kick := make(chan struct{}, 1)
-	checker := &health.Checker{Checks: cfg.Checks, Raise: srv.RaiseCheck, Resolve: srv.ResolveCheck, Logf: logf}
+	checker := &health.Checker{Checks: cfg.Checks, Raise: srv.RaiseCheck, Resolve: srv.ResolveCheck, Logf: logf, RetryAfter: 20 * time.Second}
 	srv.Checks = checker.Last
 	srv.RecheckNow = func() {
 		select {

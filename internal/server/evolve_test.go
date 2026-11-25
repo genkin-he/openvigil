@@ -332,3 +332,30 @@ func TestSignalsCanBeNarrowedToOneTask(t *testing.T) {
 		t.Fatalf("unfiltered signals = %d todos, %d changes", len(all.Todos), len(all.Watching))
 	}
 }
+
+// 11-16 21:30:43 the nightly evolve round booked an entry due 11-23 21:30:43; the next nightly round read
+// its signals at 21:30:06 and saw nothing due, so the review slipped a whole day. Reviews are by the day.
+func TestLedgerEntryIsDueFromTheStartOfItsReviewDay(t *testing.T) {
+	s, h := newServer(t)
+	do(h, "POST", "/api/tasks", applyJSON("id: slack\nname: Slack\ntrigger: {kind: manual}\n"), true)
+	_, env := do(h, "POST", "/api/evolve/ledger", `{"task":"slack","target":"brief","change":"a → b","why":"x","expect":"y","review_days":7}`, true)
+	var e LedgerEntry
+	raw, _ := json.Marshal(env.Data)
+	json.Unmarshal(raw, &e)
+	r := e.ReviewAt.In(time.Local)
+	dayStart := time.Date(r.Year(), r.Month(), r.Day(), 0, 0, 0, 0, time.Local)
+	due := func(at time.Time) int {
+		s.Now = func() time.Time { return at }
+		_, env := do(h, "GET", "/api/evolve/signals", "", true)
+		raw, _ := json.Marshal(env.Data)
+		var view signalsView
+		json.Unmarshal(raw, &view)
+		return len(view.LedgerDue)
+	}
+	if n := due(dayStart.Add(-time.Minute)); n != 0 {
+		t.Fatalf("due the day before its review: %d", n)
+	}
+	if n := due(dayStart.Add(time.Second)); n != 1 {
+		t.Fatalf("a round earlier on the review day must see it due: %d", n)
+	}
+}

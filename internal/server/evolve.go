@@ -307,7 +307,7 @@ func (s *Server) ledgerSignals(view *signalsView, mine func(string) bool) error 
 		if e.Status != LedgerWatching || !mine(e.Task) {
 			continue
 		}
-		if e.ReviewAt.After(now) {
+		if reviewDay(e.ReviewAt, now).After(now) {
 			view.Watching = append(view.Watching, e)
 			continue
 		}
@@ -425,4 +425,11 @@ func (s *Server) runSignals(since time.Time) ([]signalRun, error) {
 		}
 	}
 	return out, nil
+}
+
+// reviewDay is the start of the day a review falls on: reviews go by the day, so a round earlier that day
+// (the nightly one runs seconds before the time it booked a week ago) still sees the entry due.
+func reviewDay(at, now time.Time) time.Time {
+	at = at.In(now.Location())
+	return time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, at.Location())
 }

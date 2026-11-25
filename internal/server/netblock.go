@@ -23,10 +23,17 @@ const (
 	netBlockedKeep = 20              // lost rounds remembered for a re-run; older ones are only counted
 	netProbeEvery  = 3 * time.Minute // how often a blocked network is checked while nothing else runs
 	netProbeURL    = "https://api.anthropic.com/v1/models"
-	netRerunNote   = "（这一轮之前因为网络被拦没跑完，现在重跑。先确认上次有没有已经做过的动作，别重复发消息、别重复建待办。）\n"
+	netRerunNote   = "（这一轮之前因为网络或账号被拦没跑完，现在重跑。先确认上次有没有已经做过的动作，别重复发消息、别重复建待办。）\n"
 )
 
 var netBlockedText = regexp.MustCompile(`network_edge_blocked|Request blocked before it reached Anthropic|Attention Required! \| Cloudflare`)
+
+// A blocked account: Anthropic refuses the organization itself (11-25 12:33–13:51, 47 rounds failed,
+// nothing raised, nothing re-run). It is handled like a blocked network, with its own to-do; the edge
+// probe cannot see it end, so only a round getting through (or the owner's 复查) closes it.
+const accountBlockedRef = "api:account"
+
+var accountBlockedText = regexp.MustCompile(`can't receive replies from Claude|Anthropic Verification Portal`)
 
 // netLost is a round that failed on the blocked network, kept to run again.
 type netLost struct {
@@ -34,10 +41,12 @@ type netLost struct {
 }
 
 type netBlock struct {
-	mu    sync.Mutex
-	lost  []netLost
-	more  int                        // lost rounds beyond netBlockedKeep
-	probe func(context.Context) bool // nil: ask Anthropic's edge (tests replace it)
+	mu   sync.Mutex
+	lost []netLost
+	more int // lost rounds beyond netBlockedKeep
+	// account is set while the block is the account's: the edge probe says nothing about that.
+	account bool
+	probe   func(context.Context) bool // nil: ask Anthropic's edge (tests replace it)
 }
 
 // NetWatchLoop follows finished runs for a blocked network until ctx ends.
@@ -63,11 +72,14 @@ func (s *Server) NetWatchLoop(ctx context.Context) {
 	}
 }
 
+// noteRunForNet follows a finished run: a failed handoff of the owner's answer marks its to-do, and a
+// blocked network or account keeps the lost round to run again.
 func (s *Server) noteRunForNet(ev runner.Event) {
 	rec, ok := s.runRecord(ev.TaskID, ev.RunID)
 	if !ok || rec.Job != "" { // background jobs are not re-run: their parent decides
 		return
 	}
+	s.noteHandoff(rec)
 	nb := &s.net
 	switch {
 	case rec.Status == "ok" || rec.Status == "needs_you":
@@ -76,20 +88,17 @@ func (s *Server) noteRunForNet(ev runner.Event) {
 		nb.lost = without(nb.lost, netLost{rec.TaskID, rec.Input}) // got through on its own retry
 		nb.mu.Unlock()
 		if blocked {
-			s.netRecovered("网络恢复了（" + rec.TaskID + " 这一轮跑通了）")
+			s.netRecovered("恢复了（" + rec.TaskID + " 这一轮跑通了）")
+		}
+	case accountBlockedText.MatchString(rec.Error):
+		summary := nb.lose(netLost{rec.TaskID, rec.Input}, true)
+		if err := s.raiseSystem(accountBlockedRef, "Claude 账号被拦：Anthropic 拒绝了这个组织的请求",
+			"报错是「This organization can't receive replies from Claude right now」，要组织管理员在 Anthropic 的验证页面处理，"+
+				"换网络没用。处理好后点「复查」立刻重跑丢掉的几轮；不点也行，任何一轮跑通后会自动重跑。", summary); err != nil {
+			s.logf("account blocked: raise to-do: %v", err)
 		}
 	case netBlockedText.MatchString(rec.Error):
-		nb.mu.Lock()
-		lost := netLost{rec.TaskID, rec.Input}
-		if !contains(nb.lost, lost) {
-			if len(nb.lost) < netBlockedKeep {
-				nb.lost = append(nb.lost, lost)
-			} else {
-				nb.more++
-			}
-		}
-		summary := nb.summaryLocked()
-		nb.mu.Unlock()
+		summary := nb.lose(netLost{rec.TaskID, rec.Input}, false)
 		if err := s.raiseSystem(netBlockedRef, "网络被拦：Claude 的请求被 Anthropic 挡下",
 			"代理 / VPN 当前的出口地区或节点被拒（403 network_edge_blocked）。换一个支持的地区或节点，"+
 				"然后点「复查」立刻重跑丢掉的几轮；不点也行，Vigil 每 3 分钟探一次，网络一通就自动重跑。", summary); err != nil {
@@ -98,12 +107,29 @@ func (s *Server) noteRunForNet(ev runner.Event) {
 	}
 }
 
+// lose keeps a round lost to a block for a re-run and returns the to-do's summary.
+func (nb *netBlock) lose(l netLost, account bool) string {
+	nb.mu.Lock()
+	defer nb.mu.Unlock()
+	if account {
+		nb.account = true
+	}
+	if !contains(nb.lost, l) {
+		if len(nb.lost) < netBlockedKeep {
+			nb.lost = append(nb.lost, l)
+		} else {
+			nb.more++
+		}
+	}
+	return nb.summaryLocked()
+}
+
 // probeNet checks a blocked network directly: hours can pass without any run that would show it
 // is back (11-23 the morning brief waited 08:04→09:50 for the owner to click 复查).
 func (s *Server) probeNet(ctx context.Context) {
 	nb := &s.net
 	nb.mu.Lock()
-	blocked := len(nb.lost) > 0 || nb.more > 0
+	blocked := (len(nb.lost) > 0 || nb.more > 0) && !nb.account
 	probe := nb.probe
 	nb.mu.Unlock()
 	if !blocked {
@@ -137,7 +163,7 @@ func edgeReachable(ctx context.Context, url string) bool {
 
 func (nb *netBlock) summaryLocked() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "丢了 %d 轮，网络恢复后重跑：\n", len(nb.lost)+nb.more)
+	fmt.Fprintf(&b, "丢了 %d 轮，恢复后重跑：\n", len(nb.lost)+nb.more)
 	for _, l := range nb.lost {
 		b.WriteString("- " + l.task + "：" + clipRunes(oneLine(l.input), 80) + "\n")
 	}
@@ -152,12 +178,17 @@ func (s *Server) netRecovered(outcome string) {
 	nb := &s.net
 	nb.mu.Lock()
 	lost := nb.lost
-	nb.lost, nb.more = nil, 0
+	nb.lost, nb.more, nb.account = nil, 0, false
 	nb.mu.Unlock()
-	if err := s.resolveSystem(netBlockedRef, outcome); err != nil {
-		s.logf("net blocked: close to-do: %v", err)
+	for _, ref := range []string{netBlockedRef, accountBlockedRef} {
+		if err := s.resolveSystem(ref, outcome); err != nil {
+			s.logf("blocked: close to-do %s: %v", ref, err)
+		}
 	}
 	for _, l := range lost {
+		if m := handoffTodo.FindStringSubmatch(l.input); m != nil {
+			_, _ = s.Inbox.Resend(m[1]) // the answer is on its way again: the card stops saying it failed
+		}
 		s.Engine.Submit(runner.Request{TaskID: l.task, Trigger: runner.ByRetry, Input: netRerunNote + l.input})
 	}
 	if len(lost) > 0 {

@@ -21,7 +21,7 @@ func (f *fakeShell) run(_ context.Context, cmd string) (string, error) {
 }
 
 func TestCheckerRaisesAndResolves(t *testing.T) {
-	sh := &fakeShell{fail: map[string]int{"check-a": 1}}
+	sh := &fakeShell{fail: map[string]int{"check-a": 2}} // fails on the check and on the retry
 	raised, resolved := map[string]string{}, map[string]bool{}
 	k := &Checker{
 		Checks:  []Check{{Name: "a", Command: "check-a"}, {Name: "b", Command: "check-b"}},
@@ -43,7 +43,7 @@ func TestCheckerRaisesAndResolves(t *testing.T) {
 }
 
 func TestCheckerTriesFixFirst(t *testing.T) {
-	sh := &fakeShell{fail: map[string]int{"check": 1}}
+	sh := &fakeShell{fail: map[string]int{"check": 2}}
 	raised := false
 	k := &Checker{
 		Checks: []Check{{Name: "slack", Command: "check", Fix: "repair"}},
@@ -54,7 +54,7 @@ func TestCheckerTriesFixFirst(t *testing.T) {
 	if !res[0].OK || !res[0].Fixed || raised {
 		t.Fatalf("fix should have repaired it without a to-do: %+v raised=%v", res, raised)
 	}
-	if len(sh.ran) != 3 || sh.ran[1] != "repair" {
+	if len(sh.ran) != 4 || sh.ran[2] != "repair" {
 		t.Fatalf("ran = %v", sh.ran)
 	}
 }
@@ -83,5 +83,24 @@ func TestCheckerIgnoresFailuresFromShutdown(t *testing.T) {
 	}
 	if res := k.Run(ctx); len(res) != 0 || raised {
 		t.Fatalf("shutdown produced a result %+v raised=%v", res, raised)
+	}
+}
+
+// 11-24 19:01 glab's API call hit EOF once (a network blip, the token was fine) and the owner got a
+// "login expired" card; a minute later it passed. A check that passes on a second try is not raised.
+func TestCheckerRetriesOnceBeforeRaising(t *testing.T) {
+	sh := &fakeShell{fail: map[string]int{"check": 1}}
+	raised := false
+	k := &Checker{
+		Checks: []Check{{Name: "glab", Command: "check", Fix: "repair"}},
+		Exec:   sh.run,
+		Raise:  func(Check, string) error { raised = true; return nil },
+	}
+	res := k.Run(context.Background())
+	if !res[0].OK || res[0].Fixed || raised {
+		t.Fatalf("a blip should pass on the retry without a to-do: %+v raised=%v", res, raised)
+	}
+	if len(sh.ran) != 2 || sh.ran[1] != "check" {
+		t.Fatalf("the retry must run the check again, not the fix: %v", sh.ran)
 	}
 }

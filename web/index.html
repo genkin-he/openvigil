@@ -32,22 +32,30 @@
   </header>
 
   <main class="stage">
-    <section class="observatory" data-i18n-aria-label="dial.aria">
-      <svg id="dial" viewBox="0 0 640 640" role="img" data-i18n-aria-label="dial.svgAria"></svg>
-      <div class="tip" id="tip" hidden></div>
-      <ul class="legend" id="legend" data-i18n-aria-label="legend.aria"></ul>
+    <section class="today" data-i18n-aria-label="home.aria">
+      <div class="needs" id="needs"></div>
+      <div class="strip-box">
+        <svg id="strip" viewBox="0 0 884 46" role="img" data-i18n-aria-label="home.stripAria"></svg>
+        <div class="tip" id="tip" hidden></div>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="follows-box" id="follows"></div>
+      <section class="feed-box">
+        <h3 class="sect-title" data-i18n="home.feedTitle"></h3>
+        <ol class="feed" id="feed"></ol>
+      </section>
     </section>
 
-    <section class="roster">
-      <div class="needs" id="needs"></div>
+    <aside class="roster" data-i18n-aria-label="roster.title">
       <div class="roster-head">
         <h2 data-i18n="roster.title"></h2>
+        <span class="roster-sub" id="roster-sub"></span>
         <button class="ghost" id="forge-open" type="button" data-i18n="roster.new"></button>
       </div>
       <ol class="tasks" id="tasks"></ol>
       <p class="empty" id="empty" hidden data-i18n="roster.empty"></p>
       <div class="problems" id="problems"></div>
-    </section>
+    </aside>
   </main>
 
   <aside class="drawer" id="drawer" aria-hidden="true">

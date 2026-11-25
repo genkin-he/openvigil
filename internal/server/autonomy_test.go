@@ -21,7 +21,7 @@ func TestAutonomyCountsHowOftenTheOwnerHadToStepIn(t *testing.T) {
 		item("slack", "问数据", inbox.DecisionEdited, "是 5 条", day(0)),
 		item("slack", "问数据", inbox.DecisionHandledElsewhere, "", day(1)),
 		item("slack", "问数据", inbox.DecisionNoise, "", day(1)),
-		item("slack", "问数据", "", "", day(1)), // still open
+		{TaskID: "slack", Kind: "问数据", Status: inbox.StatusOpen, Created: day(1)}, // still open
 		item("tracker", "缺陷", inbox.DecisionAsIs, "", day(2)),
 		item("slack", "要排期", inbox.DecisionInstructed, "太早了，不算", day(9)),
 		{TaskID: "slack", Ref: "selftest:t1", Title: "Vigil 自测：待办发送", Created: day(0)}, // Vigil's own test card: not the owner's work
@@ -45,6 +45,39 @@ func TestAutonomyCountsHowOftenTheOwnerHadToStepIn(t *testing.T) {
 	}
 	if v.Kinds[2].Task != "tracker" || v.Kinds[2].Effort != 0 {
 		t.Fatalf("the kind that needs no one sorts last: %+v", v.Kinds)
+	}
+}
+
+// 11-24 showed 9 to-dos as "open" that were all settled: dialogs the owner pressed through the card, a
+// to-do the task closed after the owner approved on the web, and ones that closed without anyone.
+func TestAutonomyCountsSettledToDosWithoutADecision(t *testing.T) {
+	now := time.Date(2026, 11, 24, 20, 0, 0, 0, time.Local)
+	done := func(ref, outcome string) inbox.Item {
+		return inbox.Item{TaskID: "slack", Ref: ref, Status: inbox.StatusDone, Outcome: outcome, Created: now}
+	}
+	items := []inbox.Item{
+		done("dialog:slack", dialogPressed+"Yes」"),
+		done("dialog:slack", "agent 换了一个确认框，见新的待办"),
+		{TaskID: "slack", Ref: "C1:2", Status: inbox.StatusDone, TaskClosed: true, Decision: inbox.DecisionHandledElsewhere, Outcome: "你已在网页批准", Created: now},
+		{TaskID: "slack", Ref: "C1:3", Status: inbox.StatusDone, TaskClosed: true, Outcome: "组长已拍板，和选项一致", Created: now},
+		done("check:glab", "已恢复（自检通过）"),
+		{TaskID: "slack", Ref: "C1:4", Status: inbox.StatusOpen, Created: now},
+	}
+
+	d := autonomyOf(items, now).Days[0]
+
+	if d.Total != 6 || d.Picked != 1 || d.Elsewhere != 1 || d.Auto != 3 || d.Open != 1 || d.Effort != 1 {
+		t.Fatalf("day = %+v", d)
+	}
+}
+
+func TestTaskClosingAToDoTheOwnerHandledHimselfRecordsIt(t *testing.T) {
+	s, h := newServer(t)
+	it, _, _ := s.Inbox.Add(inbox.Item{TaskID: "slack", Kind: "要审批", Title: "批一下", Ref: "C1:1"})
+	do(h, "POST", "/api/todos/"+it.ID+"/done", `{"outcome":"你已在网页批准","by_owner":true}`, true)
+	got, _ := s.Inbox.Get(it.ID)
+	if got.Status != inbox.StatusDone || !got.TaskClosed || got.Decision != inbox.DecisionHandledElsewhere {
+		t.Fatalf("item = %+v", got)
 	}
 }
 

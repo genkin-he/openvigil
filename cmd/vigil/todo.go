@@ -14,7 +14,7 @@ import (
 const todoUsage = `vigil todo add --task <任务id> --title "<人>：<一句话>" [--kind <类别>] [--detail ..] [--analysis ..|-] [--reply ..|--shadow ..] [--link ..] [--ref ..] [--target ..] [--owner] [--choice "<按钮>|<后果>" ...]
 vigil todo list [--all]
 vigil todo kinds <任务id>          已用过的类别和你的处理方式
-vigil todo done <id> --outcome "<实际发出的原文或做了什么>"
+vigil todo done <id> --outcome "<实际发出的原文或做了什么>" [--by-owner]   --by-owner：主人自己已经处理了（网页批了、Slack 亲手回了）
 vigil todo note <id> --analysis "<补充>"|- [--reopen]`
 
 // cmdTodo manages the owner's to-dos. Agents raise them; the owner answers in the console.
@@ -171,6 +171,7 @@ func todoDone(args []string) error {
 	}
 	fs := flag.NewFlagSet("todo done", flag.ContinueOnError)
 	outcome := fs.String("outcome", "", "")
+	byOwner := fs.Bool("by-owner", false, "")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -178,7 +179,8 @@ func todoDone(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := c.call("POST", "/api/todos/"+args[0]+"/done", map[string]string{"outcome": *outcome}, nil); err != nil {
+	body := map[string]any{"outcome": *outcome, "by_owner": *byOwner}
+	if err := c.call("POST", "/api/todos/"+args[0]+"/done", body, nil); err != nil {
 		return err
 	}
 	fmt.Println("待办 " + args[0] + " 已完成")

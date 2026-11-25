@@ -1,6 +1,5 @@
-// Per-viewer console settings: task list layout, language, guided tour; plus the machine's health check
-// and moving Vigil to another computer.
-// The panel floats beside the page instead of covering it, so a layout change shows behind it at once.
+// Per-viewer console settings: language, guided tour; plus the machine's health check and moving Vigil
+// to another computer. The panel floats beside the page instead of covering it.
 import { h } from "./util.js";
 import { t, lang, setLang } from "./i18n.js";
 import { migrateSection } from "./migrate.js";
@@ -8,16 +7,14 @@ import { migrateSection } from "./migrate.js";
 const STORE_KEY = "vigil.prefs";
 const REOPEN_KEY = "vigil.settings.reopen"; // switching language reloads; reopen the panel afterwards
 
-export const LAYOUTS = ["groups", "rows", "grid"];
-const DEFAULTS = { layout: "groups", normalOpen: true };
+const DEFAULTS = {};
 
 let prefs = load();
 
 function load() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORE_KEY) || "{}") || {};
-    const layout = LAYOUTS.includes(saved.layout) ? saved.layout : DEFAULTS.layout;
-    return { ...DEFAULTS, ...saved, layout };
+    return { ...DEFAULTS, ...saved };
   } catch {
     return { ...DEFAULTS };
   }
@@ -45,7 +42,7 @@ let wired = null; // the settings button and hooks, so other views can open the 
 /**
  * Wire the settings button.
  * @param {HTMLElement} button the header button that toggles the panel
- * @param {{onChange: Function, onTour: Function, onConsoleTour: Function}} hooks onChange re-renders after a layout change
+ * @param {{onTour: Function, onConsoleTour: Function, onExported: Function}} hooks
  */
 export function initSettings(button, hooks) {
   wired = { button, hooks };
@@ -80,7 +77,6 @@ export function openMigrate() {
 function open(button, hooks, { autoDoctor = false } = {}) {
   const el = h("div", { class: "settings", role: "dialog", "aria-label": t("settings.title") },
     h("h2", { text: t("settings.title") }),
-    section(t("settings.layout"), layoutChoices(hooks)),
     section(t("settings.lang"), langChoices()),
     section(t("settings.tour"), h("div", { class: "settings-row" },
       h("p", { class: "settings-hint", text: t("settings.tourHint") }),
@@ -119,27 +115,6 @@ function choices(name, items, current, pick) {
   const buttonOf = (value) => buttons[items.findIndex((it) => it.value === value)];
   group.append(...buttons);
   return group;
-}
-
-function layoutChoices(hooks) {
-  const items = LAYOUTS.map((value) => ({
-    value, label: t(`settings.layout.${value}`), hint: t(`settings.layout.${value}.hint`), sketch: sketchOf(value),
-  }));
-  return choices(t("settings.layout"), items, prefs.layout, (layout) => {
-    setPrefs({ layout });
-    hooks.onChange();
-  });
-}
-
-/** A tiny drawing of each layout, so the choice reads at a glance. */
-function sketchOf(layout) {
-  const bar = (cls) => h("i", { class: cls });
-  const rows = {
-    groups: [bar("big warn"), bar("line"), bar("line"), bar("line")],
-    rows: [bar("line warn"), bar("line"), bar("line"), bar("line"), bar("line")],
-    grid: [bar("tile warn"), bar("tile"), bar("tile"), bar("tile")],
-  }[layout];
-  return h("span", { class: `sketch sketch-${layout}`, "aria-hidden": true }, ...rows);
 }
 
 function langChoices() {

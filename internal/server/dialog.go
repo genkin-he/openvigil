@@ -61,12 +61,15 @@ func (s *Server) answerDialog(id string, asked store.RunRecord, answer string) (
 		s.Engine.Submit(runner.Request{TaskID: id, Trigger: runner.ByRetry, Input: dialogRerunNote + input})
 	}
 	if it, open, err := s.Inbox.OpenByRef(dialogTodoRef(id)); err == nil && open {
-		s.closeDialogTodo(it, "已在会话里按下「"+answer+"」")
+		s.closeDialogTodo(it, dialogPressed+answer+"」")
 	}
 	s.logf("dialog %s: pressed %q, re-running %d rounds", id, answer, len(lost))
 	s.changed(id, "answered")
 	return map[string]any{"id": id, "pressed": answer, "rerun": len(lost)}, nil
 }
+
+// dialogPressed starts the outcome of a dialog to-do the owner answered by pressing one of its buttons.
+const dialogPressed = "已在会话里按下「"
 
 const dialogRerunNote = "（这一轮之前因为 agent 停在确认框上没送到，现在重跑。先确认上次有没有已经做过的动作，别重复发消息、别重复建待办。）\n"
 

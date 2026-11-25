@@ -132,8 +132,8 @@ func (s *Server) retrySystem(it inbox.Item) {
 		s.startSelfTest(false)
 		return
 	}
-	if it.Ref == netBlockedRef {
-		s.netRecovered("你说网络修好了，丢掉的几轮已重跑")
+	if it.Ref == netBlockedRef || it.Ref == accountBlockedRef {
+		s.netRecovered("你说已经恢复了，丢掉的几轮已重跑")
 		return
 	}
 	s.recheck()

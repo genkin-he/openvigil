@@ -461,6 +461,11 @@ func (e *Engine) dispatchResident(t task.Task, st store.State, text, runID strin
 		out.status, out.res = store.StatusTimeout, result.Fallback(result.Fail, "超时："+o.FinalText)
 	case o.Err != nil:
 		out.status, out.res, out.errText = store.StatusFail, result.Fallback(result.Fail, o.Err.Error()), o.Err.Error()
+	case resident.TurnError(o.FinalText) != "":
+		// The turn died on an API error (11-25: a blocked network) and the agent sits idle; as a failure it
+		// raises the blocked-network to-do and is re-run once the network is back, like a headless run.
+		msg := resident.TurnError(o.FinalText)
+		out.status, out.res, out.errText = store.StatusFail, result.Fallback(result.Fail, msg), msg
 	default:
 		out.status, out.res = store.StatusOK, result.Fallback(result.OK, o.FinalText)
 	}

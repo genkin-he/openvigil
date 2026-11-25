@@ -59,13 +59,15 @@ type Item struct {
 	Outcome  string `json:"outcome,omitempty"`
 	// TaskClosed marks an item its own task closed (the other side decided, the matter moved on) rather
 	// than the owner: the owner may still answer it, and their answer wins.
-	TaskClosed bool      `json:"task_closed,omitempty"`
-	Kind       string    `json:"kind,omitempty"`     // a short, stable category the raising task gives, e.g.「问进度」; decisions are learned per kind
-	Choices    []Choice  `json:"choices,omitempty"`  // fixed answers the owner picks from (buttons); free text stays possible
-	Decision   string    `json:"decision,omitempty"` // how the owner settled it: as_is, edited, instructed, dismissed
-	SlackTS    string    `json:"slack_ts,omitempty"` // the copy posted to the owner's self-DM; replies in its thread answer the item
-	Created    time.Time `json:"created_at"`
-	Updated    time.Time `json:"updated_at"`
+	TaskClosed bool     `json:"task_closed,omitempty"`
+	Kind       string   `json:"kind,omitempty"`     // a short, stable category the raising task gives, e.g.「问进度」; decisions are learned per kind
+	Choices    []Choice `json:"choices,omitempty"`  // fixed answers the owner picks from (buttons); free text stays possible
+	Decision   string   `json:"decision,omitempty"` // how the owner settled it: as_is, edited, instructed, dismissed
+	SlackTS    string   `json:"slack_ts,omitempty"` // the copy posted to the owner's self-DM; replies in its thread answer the item
+	// HandoffError is why the round carrying the owner's answer failed; empty while it is on its way.
+	HandoffError string    `json:"handoff_error,omitempty"`
+	Created      time.Time `json:"created_at"`
+	Updated      time.Time `json:"updated_at"`
 }
 
 // Choice is one fixed answer to an item: a short label (the button) and what picking it leads to.
@@ -324,7 +326,29 @@ func (b *Box) Answer(id, answer string) (Item, error) {
 		if it.Status != StatusOpen && !(it.Status == StatusDone && it.TaskClosed && !it.Owner) {
 			return it, ErrClosed
 		}
-		it.Status, it.Answer, it.TaskClosed = StatusAnswered, answer, false
+		it.Status, it.Answer, it.TaskClosed, it.HandoffError = StatusAnswered, answer, false, ""
+		return it, nil
+	})
+}
+
+// HandoffFailed records that the round carrying the owner's answer failed, with its error.
+func (b *Box) HandoffFailed(id, errText string) (Item, error) {
+	return b.update(id, func(it Item) (Item, error) {
+		if it.Status != StatusAnswered {
+			return it, ErrClosed
+		}
+		it.HandoffError = strings.TrimSpace(errText)
+		return it, nil
+	})
+}
+
+// Resend clears a failed handoff so the same answer can go to the task again.
+func (b *Box) Resend(id string) (Item, error) {
+	return b.update(id, func(it Item) (Item, error) {
+		if it.Status != StatusAnswered {
+			return it, ErrClosed
+		}
+		it.HandoffError = ""
 		return it, nil
 	})
 }

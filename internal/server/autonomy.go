@@ -28,6 +28,7 @@ type autonomyCount struct {
 	Edited    int `json:"edited"`    // the draft, rewritten
 	Elsewhere int `json:"elsewhere"` // answered by hand in Slack or the ticket
 	Dismissed int `json:"dismissed"` // nothing to do (noise, stale, dismissed)
+	Auto      int `json:"auto"`      // settled without the owner: the task, the other side or Vigil itself closed it
 	Open      int `json:"open"`      // not settled yet
 	Effort    int `json:"effort"`    // typed + edited + elsewhere
 }
@@ -55,7 +56,14 @@ func (c *autonomyCount) add(it inbox.Item) {
 	c.Total++
 	switch it.Decision {
 	case "":
-		c.Open++
+		switch {
+		case it.Status != inbox.StatusDone:
+			c.Open++
+		case strings.HasPrefix(it.Ref, dialogTodoRefPrefix) && strings.HasPrefix(it.Outcome, dialogPressed):
+			c.Picked++ // the owner pressed one of the dialog's buttons on the card
+		default:
+			c.Auto++
+		}
 	case inbox.DecisionAsIs:
 		c.AsIs++
 	case inbox.DecisionInstructed:

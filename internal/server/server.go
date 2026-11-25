@@ -149,6 +149,7 @@ func (s *Server) Handler() http.Handler {
 	api("POST /api/todos/{id}/answer", s.todoAnswer)
 	api("POST /api/todos/{id}/note", s.todoNote)
 	api("POST /api/todos/{id}/done", s.todoClose)
+	api("POST /api/todos/{id}/resend", s.todoResend)
 	api("POST /api/patches", s.patchAdd)
 	api("GET /api/checks", s.checkList)
 	api("POST /api/checks/run", s.checkRun)

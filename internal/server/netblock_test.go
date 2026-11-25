@@ -43,8 +43,8 @@ func TestABlockedNetworkRaisesOneTodoAndRerunsWhenItRecovers(t *testing.T) {
 		t.Fatal("an ordinary failure was taken for a blocked network")
 	}
 	finishRun(t, s, "r2", "slack", "fail", "小林：在吗", blockedErr)
-	finishRun(t, s, "r3", "slack", "fail", "小周：sitemap", blockedErr)
-	finishRun(t, s, "r4", "slack", "fail", "小周：sitemap", blockedErr) // the engine's own retry of r3
+	finishRun(t, s, "r3", "slack", "fail", "同事：改个文案", blockedErr)
+	finishRun(t, s, "r4", "slack", "fail", "同事：改个文案", blockedErr) // the engine's own retry of r3
 	it, ok := netTodo(t, s)
 	if !ok || it.TaskID != inbox.SystemTask || !strings.Contains(it.Analysis, "2 轮") {
 		t.Fatalf("todo = %+v (%v)", it, ok)
@@ -63,7 +63,7 @@ func TestABlockedNetworkRaisesOneTodoAndRerunsWhenItRecovers(t *testing.T) {
 			reruns = append(reruns, r.Input)
 		}
 	}
-	if len(reruns) != 1 || !strings.Contains(reruns[0], "小周：sitemap") || !strings.Contains(reruns[0], "别重复") {
+	if len(reruns) != 1 || !strings.Contains(reruns[0], "同事：改个文案") || !strings.Contains(reruns[0], "别重复") {
 		t.Fatalf("reruns = %q", reruns)
 	}
 }
@@ -71,7 +71,7 @@ func TestABlockedNetworkRaisesOneTodoAndRerunsWhenItRecovers(t *testing.T) {
 func TestRecheckingTheNetworkTodoRerunsAtOnce(t *testing.T) {
 	s, h := newServer(t)
 	do(h, "POST", "/api/tasks", applyJSON("id: slack\nname: Slack\nenabled: true\ntrigger: {kind: manual}\n"), true)
-	finishRun(t, s, "r1", "slack", "fail", "小周：sitemap", blockedErr)
+	finishRun(t, s, "r1", "slack", "fail", "同事：改个文案", blockedErr)
 	it, _ := netTodo(t, s)
 	if _, err := s.AnswerTodo(it.ID, TodoInstruct, ""); err != nil {
 		t.Fatal(err)

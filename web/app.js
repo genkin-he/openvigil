@@ -1,20 +1,24 @@
 // Console entry: overview, live updates, routing.
-import { h, api, events, toast, statusCls, triggerText, hm, relative, debounce, richText, plainText } from "./util.js";
-import { renderDial } from "./dial.js";
+import { h, api, events, toast, statusCls, triggerText, hm, mdhm, relative, debounce, richText, plainText } from "./util.js";
+import { renderToday, dayOf, waitsOnOwner } from "./home.js";
+import { groupOf } from "./today.js";
 import { openDetail, closeDetail, refreshDetail, currentDetail } from "./detail.js";
 import { openForge } from "./forge.js";
 import { t, applyStatic } from "./i18n.js";
 import { todoCards, followList } from "./todos.js";
 import { notifyDesktop, askNotifyPermission } from "./notify.js";
 import { maybeWelcome, maybeTabsTour, maybeConsoleTour, replayTour, startConsoleTour } from "./tour.js";
-import { initSettings, getPrefs, setPrefs } from "./settings.js";
+import { initSettings } from "./settings.js";
 import { exportStarted } from "./migrate.js";
 import { keepFocus, hasDraftIn } from "./drafts.js";
 
-const PULSE_BARS = 24;
 const CLOCK_TICK = 20_000;
+const PULSE_BARS = 16;
+// The tally's "you stepped in" comes from the evolution signals; refreshed at most this often.
+const AUTONOMY_EVERY = 5 * 60 * 1000;
+const GROUPS = ["look", "ran", "tonight", "off"];
 
-const state = { views: [], todos: [], follows: [], problems: [], hot: null, filter: null, first: true };
+const state = { views: [], todos: [], follows: [], problems: [], hot: null, autonomy: null, autonomyAt: 0 };
 
 const $ = (id) => document.getElementById(id);
 
@@ -27,6 +31,7 @@ async function load() {
     state.draining = !!data.draining;
     state.problems = data.problems || [];
     render();
+    loadAutonomy();
   } catch (err) {
     // After a move was started the daemon stops on purpose: say so instead of showing an error.
     $("headline").textContent = exportStarted() ? t("mig.offlineHead") : t("conn.fail", { msg: err.message });
@@ -34,19 +39,31 @@ async function load() {
 }
 
 function render() {
-  renderLegend();
   renderHeadline();
   renderNeeds();
+  renderFollows();
   renderTasks();
-  drawDial();
+  drawToday();
 }
 
-function drawDial() {
-  renderDial($("dial"), state.views, {
-    now: new Date(), first: state.first, hot: state.hot, filter: state.filter,
-    onTip: showTip, onPick: go, onHover: setHot,
-  });
-  state.first = false;
+function drawToday() {
+  const now = new Date();
+  renderToday(state, dayOf(state.views, now), { now, onTip: showTip, onPick: go });
+}
+
+/** Today's count of times the owner stepped in, across tasks; a failure just leaves the tile blank. */
+async function loadAutonomy() {
+  if (Date.now() - state.autonomyAt < AUTONOMY_EVERY) return;
+  state.autonomyAt = Date.now();
+  try {
+    const sig = await api("GET", "/api/evolve/signals");
+    const today = mdhm(new Date()).slice(0, 5);
+    const rows = (sig.autonomy?.days || []).filter((d) => d.date === today);
+    state.autonomy = { effort: rows.reduce((n, d) => n + d.effort, 0), auto: rows.reduce((n, d) => n + d.auto, 0) };
+    drawToday();
+  } catch {
+    state.autonomyAt = 0;
+  }
 }
 
 function renderHeadline() {
@@ -54,7 +71,7 @@ function renderHeadline() {
   const vs = state.views;
   const live = vs.filter((v) => v.live).length;
   const jobs = vs.reduce((n, v) => n + (v.jobs?.length || 0), 0);
-  const needs = vs.filter((v) => v.needs_you).length + state.todos.filter((it) => it.status === "open").length;
+  const needs = vs.filter((v) => v.needs_you).length + state.todos.filter(waitsOnOwner).length;
   const failing = vs.filter((v) => v.state.fail_streak > 0).length;
   const next = vs.filter((v) => v.next_run).map((v) => ({ v, t: new Date(v.next_run) })).sort((a, b) => a.t - b.t)[0];
   const parts = [];
@@ -69,61 +86,6 @@ function renderHeadline() {
   el.replaceChildren(...parts.flatMap((p, i) => (i ? [" · ", p] : [p])));
 }
 
-const LEGEND = [
-  ["ok", t("status.ok"), (st) => st === "ok"],
-  ["warn", t("status.needs_you"), (st) => st === "needs_you"],
-  ["bad", t("status.fail"), (st) => st === "fail" || st === "timeout"],
-  ["skip", t("status.skipped"), (st) => st === "skipped"],
-];
-
-function startOfToday() {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-/** Runs of a view that started today and have finished. */
-function todayRuns(v, since = startOfToday()) {
-  return v.recent.filter((r) => r.status !== "running" && new Date(r.started_at) >= since);
-}
-
-/** The legend doubles as today's tally across all tasks. */
-function renderLegend() {
-  const since = startOfToday();
-  const runs = state.views.flatMap((v) => todayRuns(v, since));
-  const end = new Date(since);
-  end.setDate(end.getDate() + 1);
-  const upcoming = state.views.filter((v) => v.next_run && new Date(v.next_run) < end).length;
-  const item = (cls, label, n, filterable = true) => h("li", {},
-    h("button", {
-      type: "button", class: `legend-item${state.filter === cls ? " on" : ""}${state.filter && state.filter !== cls ? " off" : ""}`,
-      title: filterable ? t("legend.filterTitle", { label, n }) : t("legend.itemTitle", { label, n }),
-      "aria-pressed": String(state.filter === cls), disabled: !filterable,
-      onclick: () => toggleFilter(cls),
-    }, h("i", { class: `dot ${cls}` }), label, h("b", { class: "count", text: String(n) })));
-  $("legend").replaceChildren(
-    h("li", { class: "legend-title", text: t("legend.today") }),
-    ...LEGEND.map(([cls, label, match]) => item(cls, label, runs.filter((r) => match(r.status)).length)),
-    item("next", t("legend.upcoming"), upcoming, false));
-}
-
-/** Show only one outcome's dots on the dial; clicking the same status again shows all. */
-function toggleFilter(cls) {
-  state.filter = state.filter === cls ? null : cls;
-  renderLegend();
-  drawDial();
-  if (state.filter === "warn") $("needs").scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
-function todayLine(v) {
-  const runs = todayRuns(v);
-  if (!runs.length) return t("today.none");
-  const parts = LEGEND.slice(1).map(([, label, match]) => [label, runs.filter((r) => match(r.status)).length])
-    .filter(([, n]) => n > 0).map(([label, n]) => t("today.item", { label, n }));
-  const detail = parts.length ? t("list.open") + parts.join(t("list.sep")) + t("list.close") : "";
-  return t("today.runs", { n: runs.length }) + detail;
-}
-
 // True while the owner is typing in a to-do card: rebuilding would steal focus and the caret.
 function typingIn(box) {
   return box.contains(document.activeElement) && document.activeElement.matches("textarea, input");
@@ -132,7 +94,7 @@ function typingIn(box) {
 /** A quiet note that updates are waiting, added without touching the cards. */
 function markHeld(box) {
   if (box.querySelector(".needs-held")) return;
-  box.querySelector("h2")?.after(h("p", { class: "needs-held", text: t("needs.held") }));
+  box.prepend(h("p", { class: "needs-held", text: t("needs.held") }));
 }
 
 /** The owner's rule: while anything they typed for a to-do is unsent, that section stays as it is. */
@@ -150,13 +112,14 @@ function renderNeeds() {
   state.needsStale = false;
   const items = state.views.filter((v) => v.needs_you);
   const names = new Map(state.views.map((v) => [v.task.id, v.task.name]));
+  keepFocus(() => box.replaceChildren(...todoCards(state.todos, names, load), ...items.map(needCard)));
+}
+
+/** Waiting on others sits under today's tally: it rarely needs a click, the to-dos above do. */
+function renderFollows() {
+  const names = new Map(state.views.map((v) => [v.task.id, v.task.name]));
   const waiting = followList(state.follows, names);
-  if (!items.length && !state.todos.length) {
-    box.replaceChildren(...(waiting ? [waiting] : []));
-    return;
-  }
-  keepFocus(() => box.replaceChildren(h("h2", { text: t("needs.title") }), ...todoCards(state.todos, names, load),
-    ...items.map(needCard), ...(waiting ? [waiting] : [])));
+  keepFocus(() => $("follows").replaceChildren(...(waiting ? [waiting] : [])));
 }
 
 function needCard(v) {
@@ -193,35 +156,29 @@ export async function answer(id, text) {
 
 function renderTasks() {
   const list = $("tasks");
-  const { layout, normalOpen } = getPrefs();
+  const now = new Date();
+  const on = state.views.filter((v) => v.task.enabled).length;
   $("empty").hidden = state.views.length > 0;
-  list.className = `tasks layout-${layout}`;
-  const urgent = state.views.filter(needsLook);
-  const rest = state.views.filter((v) => !needsLook(v));
-  let items;
-  if (layout === "groups") {
-    // What needs a look keeps the full card; everything else folds into one list of single lines.
-    const fold = h("li", { class: "tasks-sect" }, h("button", {
-      type: "button", class: "tasks-fold", "aria-expanded": String(normalOpen),
-      text: t("roster.normal", { n: rest.length }),
-      onclick: () => { setPrefs({ normalOpen: !normalOpen }); renderTasks(); },
-    }));
-    items = [...urgent.map((v, i) => taskRow(v, i)), ...(rest.length ? [fold] : []),
-      ...(normalOpen ? rest.map((v, i) => taskRow(v, urgent.length + i, true)) : [])];
-  } else {
-    const rows = [...urgent, ...rest].map((v, i) => taskRow(v, i));
-    items = layout === "rows" && urgent.length
-      ? [sect(t("roster.urgent", { n: urgent.length })), ...rows.slice(0, urgent.length),
-        sect(t("roster.watching", { n: rest.length })), ...rows.slice(urgent.length)]
-      : rows;
+  $("roster-sub").textContent = state.views.length ? t("home.tasksSub", { on, off: state.views.length - on }) : "";
+  const placed = state.views.map((v) => {
+    const runs = v.recent.filter((r) => r.status !== "running" && new Date(r.started_at) >= startOfToday());
+    return { v, runs, group: groupOf(v, runs, now) };
+  });
+  const items = [];
+  for (const g of GROUPS) {
+    const rows = placed.filter((p) => p.group === g);
+    if (g === "tonight") rows.sort((a, b) => new Date(a.v.next_run) - new Date(b.v.next_run));
+    if (!rows.length) continue;
+    items.push(sect(t(`home.group.${g}`)), ...rows.map((p, i) => taskRow(p, items.length + i)));
   }
   list.replaceChildren(...items);
   $("problems").replaceChildren(...state.problems.map((p) => h("p", { text: `⚠ ${p}` })));
 }
 
-/** Tasks waiting on the owner or failing come first in every layout. */
-function needsLook(v) {
-  return v.task.enabled && (!!v.needs_you || v.state.fail_streak > 0);
+function startOfToday() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
 }
 
 function sect(text) {
@@ -236,13 +193,37 @@ function stateClass(v) {
   return "";
 }
 
-function taskRow(v, i, compact = false) {
-  const last = v.last_run;
-  const when = v.live ? t("task.running") : v.next_run ? relative(new Date(v.next_run)) : t(v.task.enabled ? "task.waiting" : "task.paused");
+/** The grey line under a task's name: its trigger, when it last ran and what comes next, in its group's terms. */
+function rowSub({ v, runs, group }) {
+  const last = v.last_run ? hm(new Date(v.last_run.started_at)) : null;
+  const next = v.next_run ? new Date(v.next_run) : null;
+  const failed = runs.filter((r) => r.status === "fail" || r.status === "timeout").length;
+  const bits = [triggerText(v.task)];
+  if (group === "look" && v.needs_you) bits.push(t("home.row.waiting", { time: hm(new Date(v.needs_you.started_at)) }));
+  else if (group === "look") bits.push(t("home.row.failing", { n: v.state.fail_streak }));
+  if (group === "tonight") bits.push(t("home.row.notYet"));
+  if (group === "off") bits.push(v.task.enabled ? (next ? t("home.row.nextOn", { when: mdhm(next) }) : null) : t("task.paused"));
+  if ((group === "ran" || group === "look") && last) bits.push(t("home.row.last", { time: last }));
+  if (group === "ran" && next && next.toDateString() === new Date().toDateString()) bits.push(t("home.row.next", { time: hm(next) }));
+  if (group === "ran" && failed) bits.push(t("home.row.failedToday", { n: failed }));
+  return bits.filter(Boolean).join(" · ");
+}
+
+function rowRight({ v, runs, group }) {
+  if (v.live) return [t("task.running"), "live"];
+  if (group === "look") return v.needs_you ? [t("home.row.needsYou"), "warn"] : [t("status.fail"), "bad"];
+  if (group === "ran") return [t("home.row.runs", { n: runs.length }), ""];
+  if (group === "tonight") return [hm(new Date(v.next_run)), "live"];
+  return [v.task.enabled ? "—" : t("home.row.paused"), "muted"];
+}
+
+function taskRow(p, i) {
+  const { v } = p;
   const tone = stateClass(v);
-  const li = h("li", {
-    class: `task${tone ? ` is-${tone}` : ""}${compact ? " compact" : ""}${state.hot === v.task.id ? " hot" : ""}`,
-    "data-id": v.task.id, tabindex: 0, style: `animation-delay:${Math.min(i, 12) * 40}ms`,
+  const [right, rightCls] = rowRight(p);
+  return h("li", {
+    class: `task row${tone ? ` is-${tone}` : ""}${p.group === "look" ? " look" : ""}${state.hot === v.task.id ? " hot" : ""}`,
+    "data-id": v.task.id, tabindex: 0, style: `animation-delay:${Math.min(i, 12) * 30}ms`,
     onclick: () => go(v.task.id),
     onkeydown: (e) => { if (e.key === "Enter") go(v.task.id); },
     onmouseenter: () => setHot(v.task.id),
@@ -254,24 +235,16 @@ function taskRow(v, i, compact = false) {
         h("i", { class: `chip${v.task.mode === "resident" ? " resident" : ""}`, text: t(v.task.mode === "resident" ? "mode.resident" : "mode.headless") }),
         v.jobs?.length ? h("i", { class: "chip job", title: v.jobs.map((j) => j.title).join("\n"), text: t("task.jobs", { n: v.jobs.length }) }) : null,
         v.proposals ? h("i", { class: "proposal-dot", role: "img", title: t("task.proposals", { n: v.proposals }), "aria-label": t("task.proposals", { n: v.proposals }) }) : null),
-      h("p", { class: "task-last" },
-        last ? h("time", { text: hm(new Date(last.started_at)) }) : null,
-        last ? plainText(last.summary) : t("task.never"))),
-    h("div", { class: "task-meta" },
-      h("b", { class: `task-when${v.live ? " live" : ""}`, text: when }),
-      h("span", { class: "task-trigger", text: triggerText(v.task) }),
-      h("span", { class: "task-today", text: todayLine(v) }),
-      pulse(v)),
-  );
-  return li;
+      h("p", { class: "task-sub", text: rowSub(p) }),
+      v.last_run ? h("p", { class: "task-last" }, h("time", { text: hm(new Date(v.last_run.started_at)) }), plainText(v.last_run.summary)) : null),
+    h("div", { class: "task-meta" }, h("b", { class: `task-right ${rightCls}`, text: right }), pulse(v)));
 }
 
+/** The task's latest runs as bars, oldest first: taller for runs that need a look. */
 function pulse(v) {
-  const runs = v.recent.filter((r) => r.status !== "running").slice(0, PULSE_BARS).reverse();
-  const bars = runs.map((r) => {
+  const bars = v.recent.filter((r) => r.status !== "running").slice(0, PULSE_BARS).reverse().map((r) => {
     const cls = statusCls(r.status);
-    const height = cls === "skip" ? 4 : cls === "ok" ? 10 : 16;
-    return h("i", { class: cls, style: `height:${height}px` });
+    return h("i", { class: cls, style: `height:${cls === "skip" ? 4 : cls === "ok" ? 8 : 12}px` });
   });
   return h("div", { class: "pulse", "aria-hidden": true }, ...bars);
 }
@@ -280,7 +253,6 @@ function setHot(id) {
   if (state.hot === id) return;
   state.hot = id;
   document.querySelectorAll(".task").forEach((el) => el.classList.toggle("hot", el.dataset.id === id));
-  drawDial();
 }
 
 function showTip(e, title, time, text) {
@@ -296,7 +268,7 @@ function showTip(e, title, time, text) {
   tip.hidden = false;
 }
 
-/** Open a task; with runID the drawer scrolls to that run (a dot clicked on the dial). */
+/** Open a task; with runID the drawer scrolls to that run (a dot clicked on the strip or a line of the feed). */
 function go(id, runID) {
   location.hash = runID ? `#/task/${id}/run/${runID}` : `#/task/${id}`;
 }
@@ -321,7 +293,7 @@ const refresh = debounce(() => {
 function init() {
   applyStatic();
   initSettings($("settings"), {
-    onChange: renderTasks, onTour: () => replayTour(state.views), onConsoleTour: startConsoleTour,
+    onTour: () => replayTour(state.views), onConsoleTour: startConsoleTour,
     onExported: renderHeadline,
   });
   document.addEventListener("click", askNotifyPermission, { once: true });
@@ -337,7 +309,7 @@ function init() {
     if (state.needsStale && !hasDraftIn($("needs")) && !typingIn($("needs"))) renderNeeds();
   }, 600));
   tickClock();
-  setInterval(() => { tickClock(); drawDial(); renderHeadline(); }, CLOCK_TICK);
+  setInterval(() => { tickClock(); drawToday(); renderHeadline(); }, CLOCK_TICK);
   events((ev) => {
     if (ev.type === "stream.event") return;
     if (ev.type === "run.finished" && ev.status === "needs_you") {

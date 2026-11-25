@@ -205,3 +205,29 @@ func TestOwnerClosedItemStaysClosed(t *testing.T) {
 		t.Fatalf("answer after owner close err = %v", err)
 	}
 }
+
+// The run carrying the owner's answer failed: the item says so until the answer is handed over again.
+func TestAFailedHandoffIsMarkedUntilTheAnswerGoesOutAgain(t *testing.T) {
+	b := newBox(t)
+	it, _, _ := b.Add(Item{TaskID: "slack", Title: "陶然：少了两笔期权单"})
+	if _, err := b.HandoffFailed(it.ID, "API Error"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("an open item has no handoff to fail: %v", err)
+	}
+	if _, err := b.Answer(it.ID, "查清楚再回复"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.HandoffFailed(it.ID, "API Error: can't receive replies")
+	if err != nil || got.HandoffError != "API Error: can't receive replies" || got.Status != StatusAnswered {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	again, err := b.Resend(it.ID)
+	if err != nil || again.HandoffError != "" || again.Status != StatusAnswered || again.Answer != "查清楚再回复" {
+		t.Fatalf("resend: %+v, %v", again, err)
+	}
+	if _, err := b.Close(it.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Resend(it.ID); !errors.Is(err, ErrClosed) {
+		t.Fatalf("a closed item cannot be resent: %v", err)
+	}
+}

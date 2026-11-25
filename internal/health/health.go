@@ -61,6 +61,8 @@ type Checker struct {
 	Resolve func(c Check) error                // close the to-do of a check that passes again
 	Logf    func(string, ...any)
 	Now     func() time.Time
+	// RetryAfter is how long a failed check waits before its one retry (0: retry at once, as in tests).
+	RetryAfter time.Duration
 
 	mu   sync.Mutex
 	last map[string]Result
@@ -100,6 +102,10 @@ func (k *Checker) Run(ctx context.Context) []Result {
 
 func (k *Checker) one(ctx context.Context, run Exec, c Check) Result {
 	output, err := run(ctx, c.Command)
+	if err != nil && k.pause(ctx) {
+		// A network blip (11-24 glab: EOF on a good token) fails one try; an expired login fails both.
+		output, err = run(ctx, c.Command)
+	}
 	if err == nil {
 		return Result{Name: c.Name, OK: true}
 	}
@@ -113,6 +119,21 @@ func (k *Checker) one(ctx context.Context, run Exec, c Check) Result {
 		}
 	}
 	return Result{Name: c.Name, Output: clip(strings.TrimSpace(output+"\n"+errText(err)), maxOutput)}
+}
+
+// pause waits RetryAfter before a failed check is tried again; false when shutdown cut the wait short.
+func (k *Checker) pause(ctx context.Context) bool {
+	if k.RetryAfter <= 0 {
+		return ctx.Err() == nil
+	}
+	t := time.NewTimer(k.RetryAfter)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (k *Checker) settle(c Check, r Result) {

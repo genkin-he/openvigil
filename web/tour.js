@@ -64,10 +64,10 @@ function consoleSteps() {
     ({ target, title: `tour.console.${key}.title`, body: `tour.console.${key}.body`, optional, ...extra });
   return [
     step(q("#headline"), "headline"),
-    step(q("#dial"), "dial"),
-    step(q("#legend"), "legend"),
+    step(q("#strip"), "dial"),
+    step(q("#stats"), "legend"),
     step(q("#needs .need.todo"), "todo", true),
-    step(q("#needs .follows"), "follows", true, { enter: (el) => { el.open = true; } }),
+    step(q("#follows .follows"), "follows", true, { enter: (el) => { el.open = true; } }),
     step(q("#tasks .task"), "tasks", true),
     step(q("#settings"), "settings", false, { next: "tour.end.ok" }),
   ];

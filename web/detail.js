@@ -128,7 +128,7 @@ function autonomyBlock(a) {
     const d = byDate.get(date) || { total: 0, effort: 0 };
     const px = (n) => `${Math.round((n / peak) * AUTONOMY_BAR_PX)}px`;
     const tip = d.total ? t("auto.dayTip", { date, total: d.total, effort: d.effort, typed: d.typed, edited: d.edited,
-      elsewhere: d.elsewhere, picked: d.picked, asis: d.as_is }) : t("auto.dayNone", { date });
+      elsewhere: d.elsewhere, picked: d.picked, asis: d.as_is, auto: d.auto || 0 }) : t("auto.dayNone", { date });
     return h("div", { class: "auto-day", title: tip, "aria-label": tip },
       h("div", { class: "auto-bar", style: `height:${px(d.total)}` }, h("i", { style: `height:${px(d.effort)}` })),
       h("span", { text: date.slice(3) }));
@@ -136,7 +136,7 @@ function autonomyBlock(a) {
   const kinds = a.kinds.filter((k) => k.effort > 0).slice(0, AUTONOMY_TOP_KINDS);
   return h("section", { class: "autonomy", title: t("auto.help") },
     h("p", { class: "d-meta" }, h("b", { text: t("auto.title") }),
-      t("auto.sum", { effort: sum("effort"), total: sum("total"), picked: sum("picked"), asis: sum("as_is") })),
+      t("auto.sum", { effort: sum("effort"), total: sum("total"), picked: sum("picked"), asis: sum("as_is"), auto: sum("auto") })),
     h("div", { class: "auto-bars", role: "img", "aria-label": t("auto.aria") }, ...bars),
     kinds.length ? h("p", { class: "d-meta", text: t("auto.kinds", { list: kinds.map((k) => `${k.kind || "—"} ${k.effort}`).join(" · ") }) }) : null);
 }

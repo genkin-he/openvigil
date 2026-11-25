@@ -147,3 +147,14 @@ func TestOthersDecidingDoesNotCloseTheOwnersOpenTodo(t *testing.T) {
 		}
 	}
 }
+
+// A to-do the owner settled himself (approved on the web, replied in Slack) is closed with --by-owner, so the
+// north star counts it as his work instead of something that closed on its own (11-24 td-9f6b24).
+func TestClosingAToDoTheOwnerHandledHimselfSaysSo(t *testing.T) {
+	p := Build(ctx(task.ModeHeadless))
+	for _, want := range []string{"我自己已经处理了", "--by-owner"} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("guidance on closing what the owner did missing %q", want)
+		}
+	}
+}

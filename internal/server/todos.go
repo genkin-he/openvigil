@@ -37,6 +37,7 @@ type todoNote struct {
 
 type todoClose struct {
 	Outcome string `json:"outcome"`
+	ByOwner bool   `json:"by_owner"` // the owner handled it himself (approved on the web, replied in Slack)
 }
 
 func (s *Server) todoList(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -252,6 +253,11 @@ func (s *Server) todoClose(_ http.ResponseWriter, r *http.Request) (any, error) 
 	if err != nil {
 		return nil, todoErr(err)
 	}
+	if b.ByOwner {
+		if it, err = s.Inbox.SetDecision(it.ID, inbox.DecisionHandledElsewhere); err != nil {
+			return nil, todoErr(err)
+		}
+	}
 	s.todoChanged(it, "todo.closed")
 	return it, nil
 }
@@ -268,10 +274,13 @@ func (s *Server) vigilBin() string {
 	return "vigil"
 }
 
+// todoInputLead opens every answer handed to a task; noteHandoff finds the to-do by it.
+const todoInputLead = "我在 Vigil 待办 "
+
 // todoInput tells the task what the owner decided and how to close the loop.
 func todoInput(it inbox.Item, mode, bin string) string {
 	var b strings.Builder
-	b.WriteString("我在 Vigil 待办 " + it.ID + " 里做了决定，请照办。\n")
+	b.WriteString(todoInputLead + it.ID + " 里做了决定，请照办。\n")
 	b.WriteString("事项：" + it.Title + "\n")
 	for _, kv := range [][2]string{{"背景", it.Detail}, {"链接", it.Link}, {"ref", it.Ref}, {"回复目标", it.Target}, {"之前的分析", it.Analysis}} {
 		if strings.TrimSpace(kv[1]) != "" {

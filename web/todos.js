@@ -15,7 +15,7 @@ const SAFE_LINK = /^(https?:\/\/|slack:\/\/)/i;
  */
 export function todoCards(items, taskNames, onChange) {
   return items.map((it) => {
-    if (it.status === "answered") return answeredCard(it, taskNames);
+    if (it.status === "answered") return answeredCard(it, taskNames, onChange);
     return it.task_id === SYSTEM ? systemCard(it, taskNames, onChange) : openCard(it, taskNames, onChange);
   });
 }
@@ -89,11 +89,30 @@ function sourceLink(it) {
   return h("a", { class: "todo-link", href: it.link, target: "_blank", rel: "noopener noreferrer", text: t("todo.open") });
 }
 
-function answeredCard(it, taskNames) {
-  return h("article", { class: "need todo is-answered" },
+function answeredCard(it, taskNames, onChange) {
+  const failed = Boolean(it.handoff_error);
+  let card;
+  // The round that carried the answer failed: the task never got it, so offer to hand it over again.
+  const act = async (path, body, note) => {
+    card.replaceWith(h("p", { class: "answered", text: note }));
+    try {
+      await api("POST", `/api/todos/${it.id}/${path}`, body);
+      toast(note);
+    } catch (err) {
+      toast(err.message, true);
+    }
+    onChange();
+  };
+  card = h("article", { class: `need todo is-answered${failed ? " is-failed" : ""}` },
     head(it, taskNames),
     h("p", { class: "need-q" }, ...richText(it.title)),
-    h("p", { class: "answered" }, t("todo.inProgress", { text: it.answer })));
+    h("p", { class: "answered" }, t("todo.inProgress", { text: it.answer })),
+    failed ? h("p", { class: "todo-still", text: t("todo.handoffFailed", { err: it.handoff_error }) }) : null,
+    failed ? h("div", { class: "options" },
+      h("button", { class: "option rec", type: "button", text: t("todo.resend"), onclick: () => act("resend", {}, t("todo.handedOver")) }),
+      h("button", { class: "option", type: "button", text: t("todo.handledMyself"),
+        onclick: () => act("answer", { mode: "dismiss", reason: "handled_elsewhere", text: t("todo.handledMyselfNote") }, t("todo.dismissed")) })) : null);
+  return card;
 }
 
 function openCard(it, taskNames, onChange) {
