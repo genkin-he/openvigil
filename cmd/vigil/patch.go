@@ -56,6 +56,10 @@ func cmdPatch(args []string) error {
 // causes, and writes its log and exit code where the patch store expects them.
 func startInstall(repo string, st patch.Store) func(id string) error {
 	return func(id string) error {
+		// a retried install must not be read as finished from the last attempt's exit code
+		if err := os.Remove(st.InstallExit(id)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 		f, err := os.OpenFile(st.InstallLog(id), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err != nil {
 			return err

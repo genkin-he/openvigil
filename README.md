@@ -12,7 +12,7 @@ Describe a job in one sentence. Vigil talks it through with you, does a trial ru
 
 The agents run on [Claude Code](https://claude.com/claude-code)'s `claude` CLI. Vigil handles time, events, queueing, memory, and recovery; the AI only does the work.
 
-![The Vigil console: today's runs on a 24-hour dial, and the to-dos waiting for you](docs/screenshots/en/console.webp)
+![The Vigil console: the to-dos waiting for you, and today's runs on a 24-hour strip](docs/screenshots/en/console.webp)
 
 ## Features
 

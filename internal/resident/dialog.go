@@ -112,8 +112,9 @@ func (p Prompt) Body() string {
 }
 
 // lasting marks answers that change settings for later prompts too ("Yes, and don't ask again for …");
-// those are left to the agent's own session, where the owner sees exactly what they would allow.
-var lasting = regexp.MustCompile(`(?i)don't ask again|always|for this session|permanently`)
+// those are left to the agent's own session, where the owner sees exactly what they would allow. Claude Code
+// prints "don’t" with a typographic apostrophe.
+var lasting = regexp.MustCompile(`(?i)don[’']t ask again|always|for this session|(from|in|for) this project|permanently`)
 
 // Answers are the options the owner may pick from a card: every one that settles only this prompt.
 func (p Prompt) Answers() []string {

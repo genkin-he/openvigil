@@ -36,6 +36,7 @@ type outcome struct {
 	stuck       *store.StuckDialog // on a detour: the dialog the agent was stuck on
 	denied      []string
 	refused     []string
+	blocked     []exec.Blocked // the calls behind denied, listed on the owner's card
 	status      string
 	res         result.Result
 	structured  bool
@@ -334,6 +335,7 @@ func askAboutDenials(out outcome, granted []string) outcome {
 	if len(liftable) > 0 {
 		res.Status = result.NeedsYou
 		res.Question = DenialQuestion + "被拦的：" + strings.Join(liftable, "、")
+		res.Summary = strings.TrimSpace(res.Summary + blockedList(out.blocked, liftable))
 		res.Options = []string{"A: 允许一次，重跑一轮", "B: 永久放行（写进任务配置，以后不再拦），重跑一轮", "C: 不允许，这一轮就按现在的结果算"}
 		res.Recommendation = "A"
 		out.status = store.StatusNeedsYou
@@ -341,6 +343,24 @@ func askAboutDenials(out outcome, granted []string) outcome {
 	out.res = res
 	return out
 }
+
+// blockedList spells out the calls behind the rules being asked about, one per line, so the owner decides
+// on the commands themselves: one rule covers a read and a production deploy alike.
+func blockedList(blocked []exec.Blocked, rules []string) string {
+	var b strings.Builder
+	for _, c := range blocked {
+		if slices.Contains(rules, c.Rule) {
+			b.WriteString("\n- " + c.What)
+		}
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "\n" + blockedHead + b.String()
+}
+
+// blockedHead introduces the list of blocked calls on the owner's card.
+const blockedHead = "被拦下的具体操作："
 
 func (e *Engine) dispatchHeadless(t task.Task, st store.State, text, dir, logPath string, allow []string) outcome {
 	if t.Session.Mode == task.SessionContinue && st.SessionID != "" && st.SessionRuns < t.Session.RotateEvery {
@@ -353,7 +373,7 @@ func (e *Engine) dispatchHeadless(t task.Task, st store.State, text, dir, logPat
 func (e *Engine) headlessOnce(t task.Task, text string, prev store.State, dir, logPath string, allow []string) outcome {
 	resume := prev.SessionID
 	o := e.cfg.Headless.Run(e.ctx, exec.Request{Task: t, Prompt: text, ResumeSession: resume, LogPath: logPath, AllowTools: allow, TaskDir: dir})
-	out := outcome{sessionID: o.SessionID, cost: o.CostUSD, sessionCost: o.CostUSD, sessionRuns: 1, denied: o.Denied, refused: o.Refused}
+	out := outcome{sessionID: o.SessionID, cost: o.CostUSD, sessionCost: o.CostUSD, sessionRuns: 1, denied: o.Denied, blocked: o.Blocked, refused: o.Refused}
 	if resume != "" {
 		out.sessionRuns = prev.SessionRuns + 1
 		// claude reports a resumed session's total so far: the run itself cost only the difference.
@@ -531,7 +551,7 @@ func (e *Engine) finish(t task.Task, req Request, rec store.RunRecord, out outco
 	}
 	st, err := s.UpdateState(t.ID, func(st store.State) store.State {
 		if shuttingDown {
-			input := req.Input
+			input := withInterruptedNote(req.Input)
 			st.Interrupted = &input
 		}
 		st.RunCount++
@@ -567,7 +587,7 @@ func (e *Engine) finish(t task.Task, req Request, rec store.RunRecord, out outco
 	}
 	e.notify(t, rec, st.FailStreak)
 	if !succeeded && req.Attempt < t.Run.Retry.Max {
-		next := Request{TaskID: t.ID, Trigger: ByRetry, Input: req.Input, Attempt: req.Attempt + 1}
+		next := retryRequest(t.ID, req, rec)
 		e.cfg.AfterFunc(t.Run.Retry.Backoff.Std(), func() {
 			if e.ctx.Err() == nil {
 				e.Submit(next)
@@ -630,10 +650,49 @@ func statusLabel(s string) string {
 const interruptedNote = "（上一次跑到一半被守护进程重启打断了，这是重跑。先查清楚已经做到哪一步：MR 是否已提、发布是否已发、消息是否已发、待办是否已建，从断点继续，别重复做。）\n"
 
 func withInterruptedNote(input string) string {
-	if strings.HasPrefix(input, interruptedNote) {
-		return input
+	return interruptedNote + stripRerunNote(input)
+}
+
+// retryNotePrefix opens the note heading an automatic retry after a failed or timed-out run. Like a run
+// cut off by a restart, the failed attempt may have sent the message or opened the MR before it broke.
+const retryNotePrefix = "（自动重试："
+
+// retryWhyMax caps how much of the failed attempt's summary goes into the retry note.
+const retryWhyMax = 80
+
+func retryNote(status, why string, attempt int) string {
+	why = strings.Join(strings.Fields(why), " ")
+	if r := []rune(why); len(r) > retryWhyMax {
+		why = string(r[:retryWhyMax]) + "…"
 	}
-	return interruptedNote + input
+	if why != "" {
+		why = "：" + why
+	}
+	return fmt.Sprintf("%s上一次尝试没有成功（%s%s），这是第 %d 次重试。上一次可能已经做了一部分，先查清楚已经做到哪一步：MR 是否已提、发布是否已发、消息是否已发、待办是否已建，从断点继续，别重复做。）\n",
+		retryNotePrefix, statusLabel(status), why, attempt)
+}
+
+// stripRerunNote drops a restart or retry note heading input, so notes never stack across re-runs.
+func stripRerunNote(input string) string {
+	input = strings.TrimPrefix(input, interruptedNote)
+	if strings.HasPrefix(input, retryNotePrefix) {
+		if i := strings.Index(input, "\n"); i >= 0 {
+			return input[i+1:]
+		}
+	}
+	return input
+}
+
+// retryRequest is the automatic retry of a failed run: same input, headed by a note on why the last
+// attempt failed and a reminder to check what it already did.
+func retryRequest(taskID string, req Request, rec store.RunRecord) Request {
+	why := rec.Summary
+	if why == "" {
+		why = rec.Error
+	}
+	attempt := req.Attempt + 1
+	input := retryNote(rec.Status, why, attempt) + stripRerunNote(req.Input)
+	return Request{TaskID: taskID, Trigger: ByRetry, Input: input, Attempt: attempt}
 }
 
 // RecoverInterrupted marks runs left "running" by a previous daemon as failed and returns the requests

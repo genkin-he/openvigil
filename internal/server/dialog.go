@@ -46,6 +46,7 @@ func (s *Server) answerDialog(id string, asked store.RunRecord, answer string) (
 	defer cancel()
 	if err := s.Dialogs.AnswerDialog(ctx, t, asked.Summary, answer); err != nil {
 		if errors.Is(err, resident.ErrDialogChanged) {
+			s.forgetDialog(id)
 			return nil, errDialogChanged
 		}
 		return nil, err
@@ -66,6 +67,18 @@ func (s *Server) answerDialog(id string, asked store.RunRecord, answer string) (
 	s.logf("dialog %s: pressed %q, re-running %d rounds", id, answer, len(lost))
 	s.changed(id, "answered")
 	return map[string]any{"id": id, "pressed": answer, "rerun": len(lost)}, nil
+}
+
+// forgetDialog moves past a dialog the agent had already left when the owner went to answer it: the
+// detours that saw it before now no longer raise it, while one a later detour finds is still asked. Nothing
+// was pressed, so the round is not marked answered.
+func (s *Server) forgetDialog(id string) {
+	if _, err := s.Store.UpdateState(id, func(st store.State) store.State {
+		st.AnsweredAt = s.Now()
+		return st
+	}); err != nil {
+		s.logf("dialog %s: %v", id, err)
+	}
 }
 
 // dialogPressed starts the outcome of a dialog to-do the owner answered by pressing one of its buttons.

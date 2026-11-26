@@ -241,6 +241,9 @@ func (s *Server) followCheck(_ http.ResponseWriter, r *http.Request) (any, error
 		if f.Status != FollowWaiting {
 			return f, badRequest("%s 已经结了", f.ID)
 		}
+		if s.taskPaused(f.Task) {
+			return f, badRequest("%s 已暂停，暂停的任务不跑任何一轮，没法替你核实：自己看过后直接结掉，或者先恢复任务", f.Task)
+		}
 		if !f.Checked.IsZero() && now.Sub(f.Checked) < followCheckGap {
 			return f, badRequest("刚让它去核实过，等这一轮跑完再看")
 		}
@@ -469,9 +472,14 @@ func (s *Server) handDue() {
 		if !due(f) {
 			continue
 		}
+		paused := s.taskPaused(f.Task) // a paused task drops what it is handed: nobody would ever check
 		handed, err := s.follows().update(f.ID, func(cur Follow) (Follow, error) {
 			if !due(cur) {
 				return cur, errNotDue // settled or snoozed meanwhile
+			}
+			if paused {
+				cur.Status, cur.Outcome, cur.Updated = FollowDone, followPausedOutcome, now
+				return cur, nil
 			}
 			if cur.Hands >= followMaxHands {
 				cur.Status, cur.Outcome, cur.Updated = FollowDone, "任务连续几次没处理这条跟进，已转给你", now
@@ -498,7 +506,7 @@ func (s *Server) handDue() {
 func (s *Server) escalateFollow(f Follow) {
 	it, created, err := s.Inbox.Add(inbox.Item{TaskID: f.Task, Kind: "跟进无回音", Ref: "follow:" + f.ID, Link: f.Link,
 		Title:    "跟进卡住：" + f.Title,
-		Detail:   fmt.Sprintf("在等 %s；登记于 %s。到期后交回 %s %d 次，它都没处理（可能那几轮失败了）。", firstNonEmpty(f.Who, "对方"), f.Created.Format("01-02 15:04"), f.Task, followMaxHands),
+		Detail:   followStuckDetail(f),
 		Analysis: f.Ask})
 	if err != nil {
 		s.logf("follow-up %s: escalate: %v", f.ID, err)
@@ -507,6 +515,23 @@ func (s *Server) escalateFollow(f Follow) {
 	if created {
 		s.todoChanged(it, "todo.added")
 	}
+}
+
+// followPausedOutcome closes a due follow-up whose task is paused; it then goes to the owner.
+const followPausedOutcome = "所属任务已暂停，没法自动核实，已转给你"
+
+func followStuckDetail(f Follow) string {
+	who, at := firstNonEmpty(f.Who, "对方"), f.Created.Format("01-02 15:04")
+	if f.Outcome == followPausedOutcome {
+		return fmt.Sprintf("在等 %s；登记于 %s。到期了，但 %s 已暂停，暂停的任务不跑任何一轮，没人能替你核实：自己看一眼，或者恢复任务。", who, at, f.Task)
+	}
+	return fmt.Sprintf("在等 %s；登记于 %s。到期后交回 %s %d 次，它都没处理（可能那几轮失败了）。", who, at, f.Task, followMaxHands)
+}
+
+// taskPaused reports whether the task exists and is paused.
+func (s *Server) taskPaused(id string) bool {
+	t, err := s.Store.Get(id)
+	return err == nil && !t.Enabled
 }
 
 func followInput(f Follow, bin string) string {

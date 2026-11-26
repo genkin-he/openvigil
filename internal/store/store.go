@@ -95,7 +95,7 @@ type State struct {
 	OnceDone        bool      `json:"once_done,omitempty"`
 	AnsweredRun     string    `json:"answered_run,omitempty"`  // the needs_you run whose question was last answered
 	AnsweredText    string    `json:"answered_text,omitempty"` // what the owner answered to it
-	AnsweredAt      time.Time `json:"answered_at,omitzero"`    // when a dialog was last pressed from Vigil
+	AnsweredAt      time.Time `json:"answered_at,omitzero"`    // when a dialog was last pressed from Vigil, or found already gone
 	// Interrupted holds the input of a run cut short by a daemon shutdown; it is re-run at the next start.
 	Interrupted *string `json:"interrupted,omitempty"`
 }

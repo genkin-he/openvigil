@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"vigil/internal/inbox"
+	"vigil/internal/resident"
 	"vigil/internal/runner"
 	"vigil/internal/store"
 )
@@ -228,5 +229,45 @@ func TestADetourOnTheSameDialogKeepsTheTodo(t *testing.T) {
 	todos := openDialogTodos(t, s)
 	if len(todos) != 1 || todos[0].RunID != "r1" {
 		t.Fatalf("todos = %+v", todos)
+	}
+}
+
+// A press that finds the dialog gone must not bring the same to-do back on the next sweep: the agent left
+// that dialog, and the detours that saw it are history.
+func TestADialogFoundGoneIsNotAskedAgain(t *testing.T) {
+	s, f := slackTask(t)
+	s.Now = func() time.Time { return time.Unix(150, 0) }
+	stuckDetourRun(t, s, "d1", "Bash command：python3 -c …", 100)
+	s.syncDialogTodo("slack")
+	it := openDialogTodos(t, s)[0]
+	f.err = resident.ErrDialogChanged
+	if _, err := s.AnswerTodo(it.ID, TodoSend, "Yes"); err == nil {
+		t.Fatal("a press on a vanished dialog reported success")
+	}
+	s.syncDialogTodo("slack")
+	if todos := openDialogTodos(t, s); len(todos) != 0 {
+		t.Fatalf("the vanished dialog was asked again: %+v", todos)
+	}
+	stuckDetourRun(t, s, "d2", "Bash command：deployctl apply …", 200) // the agent's next dialog is still asked
+	s.syncDialogTodo("slack")
+	if todos := openDialogTodos(t, s); len(todos) != 1 || todos[0].RunID != "d2" {
+		t.Fatalf("the next dialog was not asked: %+v", todos)
+	}
+}
+
+// A raised to-do never offers an answer that changes settings for later prompts.
+func TestADialogTodoLeavesOutLastingAllows(t *testing.T) {
+	s, _ := slackTask(t)
+	if err := s.Store.AppendRun(store.RunRecord{ID: "d1", TaskID: "slack", Trigger: runner.ByStream, Status: store.StatusOK,
+		Detour: true, Summary: runner.DetourNote + "x", Input: "x",
+		StuckOn: &store.StuckDialog{Summary: "Bash command", Question: "agent 在等你回答「Do you want to proceed?」",
+			Options: []string{"Yes", "Yes, and don’t ask again for: python3 -c ' *", "No"}},
+		StartedAt: time.Unix(100, 0), EndedAt: time.Unix(101, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	s.syncDialogTodo("slack")
+	it := openDialogTodos(t, s)[0]
+	if got := choiceLabels(it); strings.Join(got, "|") != "Yes|No" {
+		t.Fatalf("choices = %q", got)
 	}
 }

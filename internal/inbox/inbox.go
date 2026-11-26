@@ -65,9 +65,12 @@ type Item struct {
 	Decision   string   `json:"decision,omitempty"` // how the owner settled it: as_is, edited, instructed, dismissed
 	SlackTS    string   `json:"slack_ts,omitempty"` // the copy posted to the owner's self-DM; replies in its thread answer the item
 	// HandoffError is why the round carrying the owner's answer failed; empty while it is on its way.
-	HandoffError string    `json:"handoff_error,omitempty"`
-	Created      time.Time `json:"created_at"`
-	Updated      time.Time `json:"updated_at"`
+	HandoffError string `json:"handoff_error,omitempty"`
+	// Failure is why the owner's last approved action (say, applying a patch) did not go through; shown on the
+	// card until the owner answers again.
+	Failure string    `json:"failure,omitempty"`
+	Created time.Time `json:"created_at"`
+	Updated time.Time `json:"updated_at"`
 }
 
 // Choice is one fixed answer to an item: a short label (the button) and what picking it leads to.
@@ -326,7 +329,7 @@ func (b *Box) Answer(id, answer string) (Item, error) {
 		if it.Status != StatusOpen && !(it.Status == StatusDone && it.TaskClosed && !it.Owner) {
 			return it, ErrClosed
 		}
-		it.Status, it.Answer, it.TaskClosed, it.HandoffError = StatusAnswered, answer, false, ""
+		it.Status, it.Answer, it.TaskClosed, it.HandoffError, it.Failure = StatusAnswered, answer, false, "", ""
 		return it, nil
 	})
 }
@@ -364,6 +367,20 @@ func (b *Box) Note(id, analysis string, reopen bool) (Item, error) {
 		if reopen {
 			it.Status, it.Answer = StatusOpen, ""
 		}
+		return it, nil
+	})
+}
+
+// Failed puts an item back in front of the owner because the action they approved did not go through: why
+// is added to the findings under head and kept on the item to show on the card.
+func (b *Box) Failed(id, head, why string) (Item, error) {
+	why = strings.TrimSpace(why)
+	return b.update(id, func(it Item) (Item, error) {
+		if it.Status == StatusDone {
+			return it, ErrClosed
+		}
+		it.Analysis = strings.TrimSpace(strings.TrimSpace(it.Analysis) + "\n" + head + "\n" + why)
+		it.Status, it.Answer, it.Failure = StatusOpen, "", why
 		return it, nil
 	})
 }

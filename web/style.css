@@ -111,21 +111,24 @@ button, input, textarea { font: inherit; color: inherit; }
 .sect-title { margin: 0; font: 600 var(--text-xs) var(--font-mono); letter-spacing: .22em; color: var(--muted); }
 
 /* Today as one band: a dot per run, a red box per outage, the line is now. */
-.strip-box { position: relative; display: flex; flex-direction: column; gap: 10px; }
+.strip-box {
+  position: relative; display: flex; flex-direction: column; gap: 10px;
+  padding: 16px 20px 10px; border-radius: 14px; box-shadow: inset 0 0 0 1px var(--line);
+  background: linear-gradient(180deg, rgba(150, 172, 214, .05), rgba(150, 172, 214, .015));
+}
 #strip { width: 100%; height: auto; display: block; overflow: visible; }
-.st-past { fill: rgba(150, 172, 214, .06); }
-.st-future { fill: none; stroke: rgba(150, 172, 214, .12); stroke-dasharray: 2 3; }
+.st-past { fill: rgba(150, 172, 214, .16); stroke: rgba(150, 172, 214, .22); stroke-width: 1; }
+.st-future { fill: none; stroke: rgba(150, 172, 214, .32); stroke-dasharray: 3 4; }
 .st-inc { fill: rgba(255, 93, 108, .3); stroke: var(--bad); }
-.st-dot { cursor: pointer; transition: r var(--fast); }
-.st-dot.ok { fill: var(--ok); fill-opacity: .75; }
+.st-dot { cursor: pointer; transition: r var(--fast); stroke: var(--bg); stroke-width: 1; }
+.st-dot.ok { fill: var(--ok); }
 .st-dot.warn { fill: var(--warn); }
 .st-dot.bad { fill: var(--bad); }
 .st-dot.skip { fill: var(--skip); }
-.st-dot:hover { r: 5; fill-opacity: 1; }
-.st-next { fill: var(--bg); stroke: var(--live); stroke-width: 1.4; cursor: pointer; }
-.st-now { stroke: var(--ink); stroke-width: 1.4; filter: drop-shadow(0 0 4px rgba(231, 238, 249, .7)); animation: now-blink var(--blink) ease-in-out infinite; }
-@keyframes now-blink { 0%, 100% { opacity: 1; } 50% { opacity: .2; } }
-.st-hour { fill: var(--muted); font: 500 10px var(--font-mono); text-anchor: middle; opacity: .8; }
+.st-dot:hover { r: 6.5; }
+.st-next { fill: var(--bg); stroke: var(--live); stroke-width: 2; cursor: pointer; }
+.st-now { stroke: var(--ink); stroke-width: 2; filter: drop-shadow(0 0 5px rgba(231, 238, 249, .8)); animation: now-blink var(--blink) ease-in-out infinite; }
+.st-hour { fill: var(--muted); font: 500 11px var(--font-mono); text-anchor: middle; }
 
 .stats {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -228,6 +231,23 @@ button, input, textarea { font: inherit; color: inherit; }
 .chip.job { border-color: rgba(124, 199, 255, .35); color: var(--live); }
 .chip.resident { border-color: rgba(124, 199, 255, .4); color: var(--live); background: rgba(124,199,255,.06); }
 .headline .live { color: var(--live); }
+.head-jobs { cursor: default; border-bottom: 1px dotted rgba(124, 199, 255, .5); outline: none; }
+.head-jobs:focus-visible { border-bottom-style: solid; }
+/* The headline clips its overflow, so the job list sits outside it, placed under the chip. */
+.jobs-pop {
+  position: fixed; z-index: 30; width: 360px; max-width: calc(100vw - 16px); box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 2px; padding: 10px 8px 8px; border-radius: var(--radius-m);
+  background: rgba(8, 13, 24, .96); border: 1px solid var(--line-strong); box-shadow: 0 12px 30px rgba(0,0,0,.45);
+}
+.jobs-pop[hidden] { display: none; }
+.jobs-pop-head { margin: 0 8px 4px; font: 600 10px var(--font-mono); letter-spacing: .16em; color: var(--muted); }
+.jobs-pop-row {
+  display: flex; flex-direction: column; gap: 2px; padding: 7px 8px; border: 0; border-radius: 8px;
+  background: none; color: inherit; text-align: left; cursor: pointer; font: inherit;
+}
+.jobs-pop-row:hover, .jobs-pop-row:focus-visible { background: rgba(124, 199, 255, .08); outline: none; }
+.jobs-pop-title { font: 500 var(--text-sm)/1.45 var(--font-body); color: var(--ink); overflow-wrap: anywhere; }
+.jobs-pop-meta { font: 400 var(--text-xs) var(--font-mono); color: var(--muted); }
 .run-model { margin: 4px 0 0; font: 500 var(--text-sm) var(--font-body); color: var(--muted, inherit); opacity: .8; }
 .run-job { margin: 4px 0 0; font: 600 var(--text-sm) var(--font-body); color: var(--live); }
 /* A runbook change waits for approval: a small amber dot after the name, the count in its tooltip. */
@@ -476,6 +496,12 @@ a.ext:hover { text-decoration-color: var(--live); }
 /* To-do cards */
 .todo.is-answered { opacity: .75; }
 .todo.is-answered.is-failed { opacity: 1; border-color: rgba(255, 93, 108, .45); }
+.todo-failure {
+  margin: 0; padding: 10px 14px; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: var(--text-sm); line-height: 1.6; color: var(--ink);
+  background: rgba(255, 93, 108, .08); box-shadow: inset 0 0 0 1px rgba(255, 93, 108, .4);
+}
+.todo-failure b { color: var(--bad); font-weight: 600; margin-right: .4em; }
 .todo-analysis { margin: 4px 0 12px; font-size: var(--text-sm); color: var(--ink-2); }
 .todo-analysis summary { cursor: pointer; color: var(--muted); font-size: var(--text-xs); letter-spacing: .04em; }
 .todo-analysis p { margin: 6px 0 0; white-space: pre-wrap; line-height: 1.6; }

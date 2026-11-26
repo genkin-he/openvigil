@@ -231,3 +231,22 @@ func TestAFailedHandoffIsMarkedUntilTheAnswerGoesOutAgain(t *testing.T) {
 		t.Fatalf("a closed item cannot be resent: %v", err)
 	}
 }
+
+// The reason an approved action did not go through is the first thing the owner needs on the card, not the
+// last line of the collapsed findings (11-25 22:19: a patch was refused three times for the repo's branch
+// and the card looked as if the button did nothing).
+func TestAFailedActionShowsOnTheCardUntilTheOwnerAnswersAgain(t *testing.T) {
+	b := newBox(t)
+	it, _, _ := b.Add(Item{TaskID: "self-evolve", Title: "改 Vigil 代码", Analysis: "原因"})
+	if _, err := b.Answer(it.ID, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.Failed(it.ID, "没应用成：", "仓库不在 main 分支上")
+	if err != nil || got.Status != StatusOpen || got.Failure != "仓库不在 main 分支上" || !strings.Contains(got.Analysis, "没应用成：\n仓库不在 main 分支上") {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	again, err := b.Answer(it.ID, "apply")
+	if err != nil || again.Failure != "" {
+		t.Fatalf("answering again clears the failure: %+v, %v", again, err)
+	}
+}

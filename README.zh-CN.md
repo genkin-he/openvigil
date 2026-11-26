@@ -11,7 +11,7 @@ Vigil 是一个常驻在 Mac 上的 AI 值守：
 
 AI 由 [Claude Code](https://claude.com/claude-code) 的 `claude` 命令驱动。Vigil 负责时间、事件、排队、记忆和自愈，AI 只负责干活。
 
-![Vigil 控制台：24 小时表盘上是今天跑过的每一轮，右边是等你处理的待办](docs/screenshots/zh/console.webp)
+![Vigil 控制台：上面是等你处理的待办，下面的 24 小时时间条上是今天跑过的每一轮](docs/screenshots/zh/console.webp)
 
 ## 特点
 

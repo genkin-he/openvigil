@@ -78,13 +78,68 @@ function renderHeadline() {
   if (exportStarted()) parts.push(h("span", { class: "warn", text: t("mig.offlineHead") }));
   if (state.draining) parts.push(h("span", { class: "warn", text: t("head.draining") }));
   if (live) parts.push(h("b", { text: t("head.live", { n: live }) }));
-  if (jobs) parts.push(h("span", { class: "live", text: t("head.jobs", { n: jobs }) }));
+  if (jobs) parts.push(jobsChip(jobs));
   if (needs) parts.push(h("span", { class: "warn", text: t("head.needs", { n: needs }) }));
   if (failing) parts.push(h("span", { class: "warn", text: t("head.failing", { n: failing }) }));
   if (next) parts.push(h("span", { text: t("head.next", { name: next.v.task.name, when: relative(next.t) }) }));
   if (!parts.length) parts.push(h("span", { text: t(vs.length ? "head.quiet" : "head.empty") }));
   el.replaceChildren(...parts.flatMap((p, i) => (i ? [" · ", p] : [p])));
+  if (!$("jobs-pop").hidden) showJobs(); // keep an open list current as the headline redraws
 }
+
+const JOBS_HIDE_MS = 160; // time to move the pointer from the chip onto the list
+let jobsHide = 0;
+
+/** "N background jobs" in the headline: hover or focus it to list them. */
+function jobsChip(n) {
+  const chip = h("span", { class: "live head-jobs", id: "head-jobs", tabindex: 0, "aria-describedby": "jobs-pop", text: t("head.jobs", { n }) });
+  chip.addEventListener("mouseenter", showJobs);
+  chip.addEventListener("focus", showJobs);
+  chip.addEventListener("mouseleave", hideJobsSoon);
+  chip.addEventListener("blur", hideJobsSoon);
+  return chip;
+}
+
+/** Every background job in progress, oldest first, with its task. */
+function liveJobs() {
+  return state.views
+    .flatMap((v) => (v.jobs || []).map((j) => ({ ...j, taskId: v.task.id, name: v.task.name, at: new Date(j.started_at) })))
+    .sort((a, b) => a.at - b.at);
+}
+
+function showJobs() {
+  clearTimeout(jobsHide);
+  const pop = $("jobs-pop");
+  const chip = $("head-jobs");
+  const jobs = liveJobs();
+  if (!chip || !jobs.length) {
+    pop.hidden = true;
+    return;
+  }
+  pop.replaceChildren(
+    h("p", { class: "jobs-pop-head", text: t("head.jobsTitle", { n: jobs.length }) }),
+    ...jobs.map((j) => h("button", {
+      type: "button", class: "jobs-pop-row",
+      onclick: () => { pop.hidden = true; go(j.taskId, j.run_id); },
+    },
+    h("span", { class: "jobs-pop-title", text: j.title || j.job || t("runs.job") }),
+    h("span", { class: "jobs-pop-meta", text: t("head.jobMeta", { name: j.name, at: hm(j.at), ago: relative(j.at) }) }))));
+  const r = chip.getBoundingClientRect();
+  pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - 368))}px`;
+  pop.style.top = `${r.bottom + 8}px`;
+  pop.hidden = false;
+}
+
+function hideJobsSoon() {
+  clearTimeout(jobsHide);
+  jobsHide = setTimeout(() => {
+    const pop = $("jobs-pop");
+    if (!pop.matches(":hover, :focus-within")) pop.hidden = true;
+  }, JOBS_HIDE_MS);
+}
+$("jobs-pop").addEventListener("mouseenter", () => clearTimeout(jobsHide));
+$("jobs-pop").addEventListener("mouseleave", hideJobsSoon);
+$("jobs-pop").addEventListener("focusout", hideJobsSoon);
 
 // True while the owner is typing in a to-do card: rebuilding would steal focus and the caret.
 function typingIn(box) {

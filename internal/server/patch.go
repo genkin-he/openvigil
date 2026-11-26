@@ -21,7 +21,8 @@ const (
 	patchRefPrefix   = "patch:"
 	patchKind        = "改代码"
 	patchLandTimeout = 15 * time.Minute
-	patchInstallWait = 30 * time.Minute // an install that has not reported by then is taken as failed
+	patchInstallWait = 30 * time.Minute // an install that has not reported by then gets a note on its card
+	patchSlow        = "slow"           // Result of an install past patchInstallWait, so the note is made once
 	patchPollEvery   = 15 * time.Second
 )
 
@@ -111,11 +112,14 @@ func (s *Server) settlePatch(it inbox.Item, mode string) (inbox.Item, error) {
 func (s *Server) landPatch(it inbox.Item, p patch.Proposal) {
 	ctx, cancel := context.WithTimeout(context.Background(), patchLandTimeout)
 	defer cancel()
-	msg := "feat: " + p.Title + "\n\n" + p.Why + "\n\n由 " + p.Task + " 提议（" + p.ID + "），在 Vigil 控制台确认后自动应用。"
-	sha, err := s.Patcher.Land(ctx, s.Patcher.Store.DiffPath(p.ID), msg)
-	if err != nil {
-		s.failPatch(it, p, err.Error())
-		return
+	sha := p.Commit // merged before and only the install went wrong: the diff is in main already
+	if sha == "" {
+		msg := "feat: " + p.Title + "\n\n" + p.Why + "\n\n由 " + p.Task + " 提议（" + p.ID + "），在 Vigil 控制台确认后自动应用。"
+		var err error
+		if sha, err = s.Patcher.Land(ctx, s.Patcher.Store.DiffPath(p.ID), msg); err != nil {
+			s.failPatch(it, p, err.Error())
+			return
+		}
 	}
 	p.Commit = sha
 	p = s.savePatch(p, patch.StatusInstalling, "")
@@ -133,7 +137,7 @@ func (s *Server) landPatch(it inbox.Item, p patch.Proposal) {
 func (s *Server) failPatch(it inbox.Item, p patch.Proposal, why string) {
 	s.savePatch(p, patch.StatusFailed, why)
 	s.logf("patch %s: %s", p.ID, clipRunes(why, 300))
-	noted, err := s.Inbox.Note(it.ID, "没应用成：\n"+why, true)
+	noted, err := s.Inbox.Failed(it.ID, "没应用成：", why)
 	if err != nil {
 		s.logf("patch %s: note to-do: %v", p.ID, err)
 		return
@@ -174,7 +178,8 @@ func (s *Server) finishInstalls() {
 		return
 	}
 	for _, p := range all {
-		if p.Status != patch.StatusInstalling {
+		merged := p.Status == patch.StatusFailed && p.Commit != "" // e.g. a re-apply after a slow install
+		if p.Status != patch.StatusInstalling && !merged {
 			continue
 		}
 		it, found, err := s.Inbox.LatestByRef(patchRefPrefix + p.ID)
@@ -188,10 +193,15 @@ func (s *Server) finishInstalls() {
 			if closed, err := s.Inbox.Close(it.ID, "已上线（提交 "+short(p.Commit)+"）"); err == nil {
 				s.todoChanged(closed, "todo.closed")
 			}
+		case merged: // already failed and back with the owner: only a finished install changes it
 		case done:
 			s.failPatch(it, p, "已合进 main（"+short(p.Commit)+"），但 make install 失败（退出码 "+strconv.Itoa(code)+"），线上还是旧版本：\n"+logTail(s.Patcher.Store.InstallLog(p.ID)))
-		case s.Now().Sub(p.Updated) > patchInstallWait:
-			s.failPatch(it, p, "已合进 main（"+short(p.Commit)+"），但安装 30 分钟都没有结果，看 "+s.Patcher.Store.InstallLog(p.ID))
+		case p.Result == "" && s.Now().Sub(p.Updated) > patchInstallWait:
+			// Slow is not failed (codesign can wait on the keychain): say so once and keep waiting.
+			s.savePatch(p, patch.StatusInstalling, patchSlow)
+			if noted, err := s.Inbox.Note(it.ID, "已合进 main（"+short(p.Commit)+"），安装 30 分钟还没装完（常见是签名在等钥匙串授权，看屏幕上有没有弹框）。不用再点应用，装好后这条自动结案。日志："+s.Patcher.Store.InstallLog(p.ID), false); err == nil {
+				s.todoChanged(noted, "todo.updated")
+			}
 		}
 	}
 }

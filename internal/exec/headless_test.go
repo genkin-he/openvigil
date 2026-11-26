@@ -104,6 +104,37 @@ func TestParseStreamDenials(t *testing.T) {
 	}
 }
 
+// The rule alone ("Bash(deploycli:*)") covers a read and a production deploy alike: the owner decides on the
+// command itself, so each refused call keeps what it was for and the full line (11-25 18:28: a card asked to
+// allow Bash(deploycli:*) and the owner had to ask what was actually blocked).
+func TestParseStreamKeepsWhatEachRefusedCallWas(t *testing.T) {
+	src := `{"type":"result","result":"x","permission_denials":[` +
+		`{"tool_name":"Bash","tool_input":{"command":"deploycli status --env staging app-a","description":"看测试环境的发布状态"}},` +
+		`{"tool_name":"Bash","tool_input":{"command":"deploycli rollout --env staging app-a"}},` +
+		`{"tool_name":"Write","tool_input":{"file_path":"/repo/a.go","content":"x"}}]}` + "\n"
+	out := ParseStream(strings.NewReader(src))
+	want := []Blocked{
+		{Rule: "Bash(deploycli:*)", What: "看测试环境的发布状态：deploycli status --env staging app-a"},
+		{Rule: "Bash(deploycli:*)", What: "deploycli rollout --env staging app-a"},
+		{Rule: "Write", What: "Write /repo/a.go"},
+	}
+	if !slices.Equal(out.Blocked, want) {
+		t.Fatalf("Blocked = %+v", out.Blocked)
+	}
+	if !slices.Equal(out.Denied, []string{"Bash(deploycli:*)", "Write"}) {
+		t.Fatalf("Denied = %v", out.Denied)
+	}
+}
+
+func TestBlockedCommandsAreCutToOneShortLine(t *testing.T) {
+	long := strings.Repeat("a", 300)
+	src := `{"type":"result","result":"x","permission_denials":[{"tool_name":"Bash","tool_input":{"command":"deploycli run \\\n  --x ` + long + `"}}]}` + "\n"
+	got := ParseStream(strings.NewReader(src)).Blocked[0].What
+	if strings.Contains(got, "\n") || len([]rune(got)) > blockedMax+1 || !strings.HasSuffix(got, "…") {
+		t.Fatalf("What = %q", got)
+	}
+}
+
 func TestParseStreamLeavesClassifierRefusalsOutOfDenied(t *testing.T) {
 	// The auto mode classifier refuses by judging the action itself; an allow rule does not change its mind,
 	// so offering "allow and re-run" for it only loops. Only rule-based refusals become Denied.

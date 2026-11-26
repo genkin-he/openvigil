@@ -178,6 +178,8 @@ function openCard(it, taskNames, onChange) {
     draft ? h("div", { class: "todo-draft" },
       h("label", { class: "todo-label", text: t(labels[0]) }), draft) : null,
     choiceButtons(it, rule || owner, () => instruct.value.trim(), submit),
+    // The last approval did not go through: say why right above the buttons it will be pressed from again.
+    it.failure ? h("p", { class: "todo-failure", role: "alert" }, h("b", { text: t("todo.failed") }), ...richText(it.failure)) : null,
     h("div", { class: "options" },
       draft ? h("button", { class: "option rec", type: "button", text: t(labels[1]),
         onclick: () => draft.value.trim() && submit("send", draft.value.trim()) }) : null,

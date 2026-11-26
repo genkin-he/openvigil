@@ -124,7 +124,7 @@ func cmdDaemon(_ []string) error {
 	vigilSession := herdr.New(cfg.HerdrBin, cfg.HerdrSession)
 	fg := forge.Forge{H: herdr.New(cfg.HerdrBin, cfg.UserSession), VigilBin: bin, Root: cfg.Root,
 		HerdrBin: cfg.HerdrBin, ResidentSession: cfg.HerdrSession}
-	res := resident.Executor{H: vigilSession, Server: vigilSession, Poll: residentPoll}
+	res := resident.Executor{H: vigilSession, Server: vigilSession, Poll: residentPoll, Guard: shellQuote(selfPath())}
 	notifier := notify.Notifier{Webhook: cfg.Webhook, Log: logf}
 	hub := runner.NewHub()
 	engine := runner.New(ctx, runner.Config{

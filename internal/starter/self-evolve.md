@@ -90,7 +90,7 @@
 包括四种：
 - **改变行为边界的规则或提示词**：什么能直接做、什么要问我、能做哪些写操作、能许诺什么、对谁用什么语气。
   - `$V todo add --task self-evolve --kind 改规则 --title "<任务>：<一句话>" --ref evolve:<日期>:<短标识> --analysis "<证据：哪几次纠错、改写或失败；根因；改了能省掉什么>" --reply "<改哪个文件的哪一段：原文 → 新文，写到能直接照着改>"`
-  - 提之前先回放：把原文、新文各存成一个文件，跑 `$V evolve replay --task <任务> --doc <brief.md|runbook.md|memory.md> --before-file <原文> --after-file <新文> [--kind <相关类别>]`（原文为空表示在文件末尾追加，就不传 `--before-file`）。它会拿这个任务过去的真实轮次，在完全没有工具的情况下分别按改前、改后的规则判断「这一轮会怎么处理」，再和我当时的实际处理对比，打印一行结论和报告 id。
+  - 提之前先回放：把原文、新文各存成一个文件，跑 `$V evolve replay --task <任务> --doc <brief.md|runbook.md|memory.md|owner.md> --before-file <原文> --after-file <新文> [--kind <相关类别>]`（原文为空表示在文件末尾追加，就不传 `--before-file`）。它会拿这个任务过去的真实轮次，在完全没有工具的情况下分别按改前、改后的规则判断「这一轮会怎么处理」，再和我当时的实际处理对比，打印一行结论和报告 id。
   - 结论里「更远」多于「更近」：不提这条建议，用 `$V evolve record` 记一笔，`--expect` 写「回放否决：<结论>」。
   - 否则照常提，把回放结论原样写进 `--analysis` 第一行，`--link` 填 `/api/evolve/replay/<报告 id>`。
   - 改 task.yaml、改权限、收回授权这几类回放模拟不出效果，不跑回放。

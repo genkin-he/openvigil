@@ -169,7 +169,7 @@ func evolveReplay(args []string) error {
 		return err
 	}
 	if req.Task == "" || req.Doc == "" || *afterFile == "" {
-		return errors.New("用法：vigil evolve replay --task <id> --doc <brief.md|runbook.md|memory.md> --after-file <新文> [--before-file <原文>] [--kind <类别>] [--runs a,b]")
+		return errors.New("用法：vigil evolve replay --task <id> --doc <brief.md|runbook.md|memory.md|owner.md> --after-file <新文> [--before-file <原文>] [--kind <类别>] [--runs a,b]")
 	}
 	for _, f := range []struct {
 		path string

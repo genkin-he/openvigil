@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"vigil/internal/inbox"
+	"vigil/internal/resident"
 	"vigil/internal/runner"
 	"vigil/internal/store"
 )
@@ -118,7 +119,7 @@ func (s *Server) raiseDialogTodo(taskID string, rec store.RunRecord) {
 		name = t.Name
 	}
 	var choices []inbox.Choice
-	for _, o := range rec.Options {
+	for _, o := range (resident.Prompt{Options: rec.Options}).Answers() { // lasting allows stay in herdr
 		c := inbox.Choice{Label: clipRunes(o, dialogTodoChoiceMax)}
 		if c.Label != o {
 			c.Note = clipRunes(o, inbox.MaxChoiceNote)

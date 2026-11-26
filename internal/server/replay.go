@@ -33,10 +33,14 @@ const (
 
 var replayDocs = []string{"brief.md", "runbook.md", "memory.md"}
 
+// replayOwnerDoc is the owner's principles: not a task's file, but every round reads it, so a replay can
+// change it too (judged on the rounds of req.Task) and always carries it in the rules.
+const replayOwnerDoc = "owner.md"
+
 // ReplayRequest names a rule change and, optionally, the rounds to replay it on.
 type ReplayRequest struct {
 	Task   string   `json:"task"`
-	Doc    string   `json:"doc"`    // brief.md, runbook.md or memory.md
+	Doc    string   `json:"doc"`    // brief.md, runbook.md, memory.md or owner.md
 	Before string   `json:"before"` // the passage as it stands; "" appends After at the end of Doc
 	After  string   `json:"after"`
 	Runs   []string `json:"runs,omitempty"` // rounds to replay; empty picks them
@@ -161,8 +165,8 @@ func (s *Server) replayRules(req ReplayRequest) (string, string, error) {
 	if _, err := s.Store.Get(req.Task); err != nil {
 		return "", "", badRequest("%v", err)
 	}
-	if !slices.Contains(replayDocs, req.Doc) {
-		return "", "", badRequest("只能回放 brief.md、runbook.md、memory.md 的改动")
+	if req.Doc != replayOwnerDoc && !slices.Contains(replayDocs, req.Doc) {
+		return "", "", badRequest("只能回放 brief.md、runbook.md、memory.md、owner.md 的改动")
 	}
 	if strings.TrimSpace(req.After) == "" && req.Before == "" {
 		return "", "", badRequest("after 不能为空")
@@ -172,6 +176,11 @@ func (s *Server) replayRules(req ReplayRequest) (string, string, error) {
 		text, _ := s.Store.ReadDoc(req.Task, d)
 		docs[d] = text
 	}
+	owner, err := s.Store.ReadOwner()
+	if err != nil {
+		return "", "", err
+	}
+	docs[replayOwnerDoc] = owner
 	changed := docs[req.Doc]
 	switch {
 	case req.Before == "":
@@ -188,11 +197,15 @@ func (s *Server) replayRules(req ReplayRequest) (string, string, error) {
 
 var briefRef = regexp.MustCompile(`~/[^\s"'()（）]+\.md`)
 
-// rulesText joins a task's rules, with the prompt files its brief points at.
+// rulesText joins a task's rules, the owner's principles every round reads, and the prompt files its
+// brief points at.
 func rulesText(docs map[string]string) string {
 	var b strings.Builder
 	for _, d := range replayDocs {
 		fmt.Fprintf(&b, "## %s\n\n%s\n\n", d, docs[d])
+	}
+	if owner := docs[replayOwnerDoc]; strings.TrimSpace(owner) != "" {
+		fmt.Fprintf(&b, "## %s（我的判断原则，所有任务共用）\n\n%s\n\n", replayOwnerDoc, owner)
 	}
 	home, _ := os.UserHomeDir()
 	for _, ref := range briefRef.FindAllString(docs["brief.md"], -1) {

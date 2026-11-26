@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"vigil/internal/inbox"
 	"vigil/internal/patch"
@@ -106,7 +107,7 @@ func TestAPatchThatFailsToLandComesBackWithTheReason(t *testing.T) {
 	}
 	s.Wait()
 	it, _ := s.Inbox.Get(tid)
-	if it.Status != inbox.StatusOpen || !strings.Contains(it.Analysis, "跑测试") || len(f.installed) != 0 {
+	if it.Status != inbox.StatusOpen || !strings.Contains(it.Analysis, "跑测试") || !strings.Contains(it.Failure, "跑测试") || len(f.installed) != 0 {
 		t.Fatalf("card = %+v installed=%v", it, f.installed)
 	}
 }
@@ -168,5 +169,55 @@ func TestProposalsNeedASourceDir(t *testing.T) {
 	body, _ := json.Marshal(patchRequest{Task: "self-evolve", Title: "x", Diff: sampleDiff})
 	if rec, _ := do(h, "POST", "/api/patches", string(body), true); rec.Code != http.StatusBadRequest {
 		t.Fatalf("code = %d", rec.Code)
+	}
+}
+
+// A slow install (11-26: codesign waited 40 minutes for the keychain) is not a failure: the card stays
+// answered with a note, and closes when the install does finish.
+func TestASlowInstallKeepsWaitingInsteadOfReopeningTheCard(t *testing.T) {
+	s, h, f := patchServer(t)
+	now := time.Now()
+	s.Now = func() time.Time { return now }
+	pid, tid := proposePatch(t, h)
+	_, _ = s.AnswerTodo(tid, TodoSend, "")
+	s.Wait()
+	now = now.Add(patchInstallWait + time.Minute)
+	s.finishInstalls()
+	it, _ := s.Inbox.Get(tid)
+	if it.Status != inbox.StatusAnswered || it.Failure != "" || !strings.Contains(it.Analysis, "还没装完") {
+		t.Fatalf("slow install: %+v", it)
+	}
+	now = now.Add(patchInstallWait + time.Minute)
+	s.finishInstalls() // the note is not repeated
+	if got, _ := s.Inbox.Get(tid); strings.Count(got.Analysis, "还没装完") != 1 {
+		t.Fatalf("noted again: %q", got.Analysis)
+	}
+	_ = os.WriteFile(s.Patcher.Store.InstallExit(pid), []byte("0\n"), 0o600)
+	s.finishInstalls()
+	if it, _ := s.Inbox.Get(tid); it.Status != inbox.StatusDone {
+		t.Fatalf("not closed once installed: %+v", it)
+	}
+	if len(f.landed) != 1 {
+		t.Fatalf("landed %d times", len(f.landed))
+	}
+}
+
+// Once merged, applying the card again only retries the install: the diff is already in main.
+func TestApplyingAMergedPatchAgainOnlyReinstalls(t *testing.T) {
+	s, h, f := patchServer(t)
+	pid, tid := proposePatch(t, h)
+	_, _ = s.AnswerTodo(tid, TodoSend, "")
+	s.Wait()
+	_ = os.WriteFile(s.Patcher.Store.InstallExit(pid), []byte("2"), 0o600)
+	s.finishInstalls() // the install failed: the card is back
+	if _, err := s.AnswerTodo(tid, TodoSend, ""); err != nil {
+		t.Fatal(err)
+	}
+	s.Wait()
+	if len(f.landed) != 1 || len(f.installed) != 2 {
+		t.Fatalf("landed=%d installed=%d", len(f.landed), len(f.installed))
+	}
+	if p, _ := s.Patcher.Store.Get(pid); p.Status != patch.StatusInstalling || p.Commit == "" {
+		t.Fatalf("patch = %+v", p)
 	}
 }

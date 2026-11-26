@@ -309,3 +309,47 @@ func TestDecideHasADeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestReplayChangesTheOwnersPrinciples(t *testing.T) {
+	s, calls := replayServer(t, 2)
+	if err := s.Store.WriteOwner("- 2026-11-20 原则：OLDRULE\n"); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := s.Replay(context.Background(), ReplayRequest{Task: "slack", Doc: "owner.md", Before: "OLDRULE", After: "NEWRULE",
+		Runs: []string{"r00", "r01"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 4 || rep.Doc != "owner.md" || len(rep.Rows) != 2 {
+		t.Fatalf("report = %+v (calls %d)", rep, calls.Load())
+	}
+	for _, r := range rep.Rows {
+		if r.After.Action != replay.ActionReply || r.Before.Action != replay.ActionIgnore {
+			t.Fatalf("the changed principle must reach the replayed rules: %+v", r)
+		}
+	}
+	if got, _ := s.Store.ReadOwner(); !strings.Contains(got, "OLDRULE") {
+		t.Fatalf("a replay must not write owner.md: %q", got)
+	}
+}
+
+func TestReplayRulesCarryTheOwnersPrinciples(t *testing.T) {
+	s, _ := replayServer(t, 1)
+	if err := s.Store.WriteOwner("- 2026-11-20 OWNERLINE\n"); err != nil {
+		t.Fatal(err)
+	}
+	before, after, err := s.replayRules(ReplayRequest{Task: "slack", Doc: "brief.md", Before: "OLDRULE", After: "NEWRULE"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(before, "OWNERLINE") || !strings.Contains(after, "OWNERLINE") || !strings.Contains(after, "NEWRULE") {
+		t.Fatalf("rules must hold owner.md whatever doc is replayed:\nbefore=%s\nafter=%s", before, after)
+	}
+	appended, _, err := s.replayRules(ReplayRequest{Task: "slack", Doc: "owner.md", After: "- 2026-11-26 NEWLINE"})
+	if err != nil || strings.Contains(appended, "NEWLINE") {
+		t.Fatalf("appending a principle: before must not hold it (%v)", err)
+	}
+	if _, _, err := s.replayRules(ReplayRequest{Task: "slack", Doc: "task.yaml", After: "x"}); err == nil {
+		t.Fatal("other files must still be refused")
+	}
+}

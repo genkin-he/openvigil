@@ -38,16 +38,16 @@ const X = (d, now) => {
 function renderStrip(svg, day, now, onTip, onPick) {
   const nowX = X(now, now);
   const kids = [
-    s("rect", { class: "st-past", x: STRIP.x0, y: 10, width: Math.max(0, nowX - STRIP.x0), height: 16, rx: 8 }),
-    s("rect", { class: "st-future", x: nowX, y: 10, width: Math.max(0, STRIP.x1 - nowX), height: 16, rx: 8 }),
+    s("rect", { class: "st-past", x: STRIP.x0, y: 6, width: Math.max(0, nowX - STRIP.x0), height: 24, rx: 12 }),
+    s("rect", { class: "st-future", x: nowX, y: 6, width: Math.max(0, STRIP.x1 - nowX), height: 24, rx: 12 }),
     ...day.incs.filter((i) => i.runs.length > 1).map((i) => {
       const x = X(i.start, now) - 3;
-      return s("rect", { class: "st-inc", x, y: 7, width: Math.max(6, X(i.end, now) + 3 - x), height: 22, rx: 4 });
+      return s("rect", { class: "st-inc", x, y: 3, width: Math.max(6, X(i.end, now) + 3 - x), height: 30, rx: 6 });
     }),
   ];
   for (const r of day.runs) {
     const cls = statusCls(r.status);
-    const dot = s("circle", { class: `st-dot ${cls}`, cx: X(r.at, now), cy: 18, r: cls === "ok" || cls === "skip" ? 2.4 : 3.6 });
+    const dot = s("circle", { class: `st-dot ${cls}`, cx: X(r.at, now), cy: 18, r: cls === "ok" || cls === "skip" ? 4 : 5.2 });
     dot.addEventListener("mouseenter", (e) => onTip(e, `${r.name} · ${statusLabel(r.status)}`, mdhm(r.at), plainText(r.summary)));
     dot.addEventListener("mouseleave", () => onTip(null));
     dot.addEventListener("click", () => onPick(r.taskId, r.id));
@@ -55,17 +55,17 @@ function renderStrip(svg, day, now, onTip, onPick) {
   }
   for (const v of day.next) {
     const at = new Date(v.next_run);
-    const ring = s("circle", { class: "st-next", cx: X(at, now), cy: 18, r: 3.5 });
+    const ring = s("circle", { class: "st-next", cx: X(at, now), cy: 18, r: 4.5 });
     ring.addEventListener("mouseenter", (e) => onTip(e, t("dial.next", { name: v.task.name }), hm(at), ""));
     ring.addEventListener("mouseleave", () => onTip(null));
     ring.addEventListener("click", () => onPick(v.task.id));
     kids.push(ring);
   }
   // The strip is redrawn every 20 s and on every event; keep the blink in phase so it never jumps.
-  kids.push(s("line", { class: "st-now", x1: nowX, y1: 4, x2: nowX, y2: 32, style: `animation-delay:-${Date.now() % BLINK_MS}ms` }));
-  for (const hr of [0, 6, 12, 18, 24]) {
+  kids.push(s("line", { class: "st-now", x1: nowX, y1: 0, x2: nowX, y2: 36, style: `animation-delay:-${Date.now() % BLINK_MS}ms` }));
+  for (const hr of [0, 3, 6, 9, 12, 15, 18, 21, 24]) {
     const at = new Date(startOfDay(now).getTime() + (hr / 24) * DAY_MS);
-    kids.push(s("text", { class: "st-hour", x: X(at, now), y: 44, text: String(hr).padStart(2, "0") }));
+    kids.push(s("text", { class: "st-hour", x: X(at, now), y: 50, text: String(hr).padStart(2, "0") }));
   }
   svg.replaceChildren(...kids);
 }

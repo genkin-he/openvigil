@@ -267,3 +267,31 @@ func TestOwnerCanAskTheTaskToCheckAFollowNow(t *testing.T) {
 		t.Fatalf("check on a closed follow = %d", rec.Code)
 	}
 }
+
+// A paused task drops every run it is handed, so a follow-up of a paused task would sit "checking…" and
+// get handed again and again. Checking it now is refused with the reason, and once due it goes straight
+// to the owner instead.
+func TestAFollowOfAPausedTaskGoesToTheOwnerInsteadOfWaiting(t *testing.T) {
+	s, h := newServer(t)
+	do(h, "POST", "/api/tasks", applyJSON("id: cms\nname: CMS 修复\nenabled: false\ntrigger: {kind: manual}\n"), true)
+	now := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	s.Now = func() time.Time { return now }
+	_, env := do(h, "POST", "/api/follows", `{"task":"cms","title":"等 Lee 点部署","who":"Lee","due":"1h"}`, true)
+	f := decodeData[Follow](t, env.Data)
+
+	rec, env := do(h, "POST", "/api/follows/"+f.ID+"/check", "", true)
+	if rec.Code != 400 || !strings.Contains(env.Error, "暂停") {
+		t.Fatalf("check on a paused task = %d %q", rec.Code, env.Error)
+	}
+
+	now = now.Add(2 * time.Hour)
+	s.handDue()
+	s.Engine.Wait()
+	if runs, _ := s.Store.Runs("cms", 0); len(runs) != 0 {
+		t.Fatalf("handed to a paused task: %+v", runs)
+	}
+	it, ok, _ := s.Inbox.OpenByRef("follow:" + f.ID)
+	if !ok || !strings.Contains(it.Analysis+it.Detail+it.Title, "暂停") {
+		t.Fatalf("not with the owner, or no reason: %+v", it)
+	}
+}

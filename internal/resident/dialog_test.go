@@ -108,3 +108,22 @@ func TestReadPromptCollectsOptionsSplitByDescriptionsAndRules(t *testing.T) {
 		t.Fatalf("prompt = %+v", p)
 	}
 }
+
+// Claude Code prints "don’t" with a typographic apostrophe; a lasting allow must still never reach a card.
+func TestALastingAllowWithACurlyApostropheIsNotOffered(t *testing.T) {
+	p := Prompt{Options: []string{"Yes", "Yes, and don’t ask again for: python3 -c ' *", "No"}, Keys: []string{"1", "2", "3"}}
+	if got := strings.Join(p.Answers(), "|"); got != "Yes|No" {
+		t.Fatalf("answers = %q", got)
+	}
+	if _, ok := p.Key("Yes, and don’t ask again for: python3 -c ' *"); ok {
+		t.Fatal("a lasting allow has a key")
+	}
+}
+
+// "allow reading from <dir> from this project" writes a lasting rule into the project's settings.
+func TestAProjectWideAllowIsNotOffered(t *testing.T) {
+	p := Prompt{Options: []string{"Yes", "Yes, allow reading from /home/owner/work from this project", "No"}, Keys: []string{"1", "2", "3"}}
+	if got := strings.Join(p.Answers(), "|"); got != "Yes|No" {
+		t.Fatalf("answers = %q", got)
+	}
+}

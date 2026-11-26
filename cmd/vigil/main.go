@@ -23,7 +23,7 @@ func init() {
 		"daemon":    {"vigil daemon                          运行守护进程（launchd 调用）", cmdDaemon},
 		"install":   {"vigil install [--force] [--no-selftest]   安装为 launchd 服务并启动（先等进行中的轮次跑完；装完后台自测）", cmdInstall},
 		"follow":    {"vigil follow add --task --title --due 1d [--who --ask --link --ref] | list [--all] | done <fu-id> --outcome | snooze <fu-id> --due 1d [--nudged]   等别人回复的跟进", cmdFollow},
-		"evolve":    {"vigil evolve signals [--since RFC3339] [--task <id>] | ledger | record --task --target --change --why --expect [--backup] [--todo] [--metric <类别>] [--review-days 7] | verdict <ev-id> --keep|--revert --note | replay --task <id> --doc brief.md|runbook.md|memory.md --after-file <f> [--before-file <f>] [--kind <类别>] [--runs a,b]", cmdEvolve},
+		"evolve":    {"vigil evolve signals [--since RFC3339] [--task <id>] | ledger | record --task --target --change --why --expect [--backup] [--todo] [--metric <类别>] [--review-days 7] | verdict <ev-id> --keep|--revert --note | replay --task <id> --doc brief.md|runbook.md|memory.md|owner.md --after-file <f> [--before-file <f>] [--kind <类别>] [--runs a,b]", cmdEvolve},
 		"owner":     {"vigil owner [show] | append \"<原则>\" | set -f <文件>   我的判断原则（所有任务每轮都读）", cmdOwner},
 		"retro":     {"vigil retro [--days 7]                 一段时间的运行、失败原因、成本、待办处理统计（JSON）", cmdRetro},
 		"selftest":  {"vigil selftest [--status]              端到端自测：Slack 监听回复、待办发送、后台子任务", cmdSelfTest},
@@ -49,6 +49,7 @@ func init() {
 		"export":    {"vigil export [-o 包.tar.gz]             搬家：跑完进行中的活、停掉服务，把数据打成一个包（登录和 token 不打包）", cmdExport},
 		"import":    {"vigil import <包> [--force] [--no-install]   搬家：在新电脑解包、改路径、体检，全部就绪才安装启动", cmdImport},
 		"doctor":    {"vigil doctor                          体检：工具、登录、任务用到的仓库和目录是否都在", cmdDoctor},
+		"guard":     {"vigil guard --task <id>               常驻会话的 PreToolUse 钩子：会弹确认框的调用当场拒掉，改交后台子任务（Vigil 自动挂上，不用手动跑）", cmdGuard},
 		"patch":     {"vigil patch propose --task <id> --title \"…\" --why \"…\" -f change.diff   提议改 Vigil 自己的代码（git diff），主人在控制台确认后自动测试、合并、安装", cmdPatch},
 	}
 }

@@ -301,7 +301,7 @@ func TestShutdownMidRunIsRerunAtNextStart(t *testing.T) {
 		t.Fatal("shutdown must not notify")
 	}
 	redo, err := RecoverInterrupted(s, time.Now())
-	if err != nil || len(redo) != 1 || redo[0].Input != "批次" || redo[0].Trigger != ByRetry {
+	if err != nil || len(redo) != 1 || redo[0].Input != interruptedNote+"批次" || redo[0].Trigger != ByRetry {
 		t.Fatalf("redo = %+v, %v", redo, err)
 	}
 }
@@ -317,6 +317,20 @@ func TestDeniedOperationsBecomeADecision(t *testing.T) {
 	h.run(Request{TaskID: "d", Trigger: ByAnswer, AllowTools: r.Denied})
 	if got := h.h.reqs[1].AllowTools; len(got) != 1 || got[0] != "Bash(touch:*)" {
 		t.Fatalf("allow rules not passed: %v", got)
+	}
+}
+
+func TestTheDecisionSaysWhichCommandsWereBlocked(t *testing.T) {
+	h := newHarness(t, exec.Outcome{FinalText: okBlock, Denied: []string{"Bash(deploycli:*)"}, Blocked: []exec.Blocked{
+		{Rule: "Bash(deploycli:*)", What: "看测试环境的发布状态：deploycli status --env staging app-a"},
+		{Rule: "Bash(deploycli:*)", What: "deploycli rollout --env staging app-a"},
+	}})
+	h.put(t, manual("w"))
+	r := h.run(Request{TaskID: "w", Trigger: ByManual})[0]
+	for _, want := range []string{"deploycli status --env staging app-a", "deploycli rollout --env staging app-a", "看测试环境的发布状态"} {
+		if !strings.Contains(r.Summary, want) {
+			t.Fatalf("the card must show each blocked command, missing %q: %q", want, r.Summary)
+		}
 	}
 }
 
@@ -572,5 +586,44 @@ func TestResidentTurnEndingOnAnAPIErrorFails(t *testing.T) {
 	}
 	if strings.Contains(runs[0].Summary, "回复小王") {
 		t.Fatalf("summary is the screen: %q", runs[0].Summary)
+	}
+}
+
+func TestRetryRequestCarriesCheckProgressNote(t *testing.T) {
+	rec := store.RunRecord{Status: store.StatusTimeout, Summary: "跑了 30 分钟\n没结束"}
+	next := retryRequest("a", Request{TaskID: "a", Input: "发早报", Attempt: 0}, rec)
+	if next.Trigger != ByRetry || next.Attempt != 1 || !strings.HasSuffix(next.Input, "）\n发早报") {
+		t.Fatalf("next = %+v", next)
+	}
+	for _, want := range []string{retryNotePrefix, "超时：跑了 30 分钟 没结束", "第 1 次重试", "消息是否已发"} {
+		if !strings.Contains(next.Input, want) {
+			t.Fatalf("retry input lacks %q: %q", want, next.Input)
+		}
+	}
+	again := retryRequest("a", next, store.RunRecord{Status: store.StatusFail, Error: "exit 1"})
+	if strings.Count(again.Input, retryNotePrefix) != 1 || !strings.Contains(again.Input, "失败：exit 1") ||
+		!strings.Contains(again.Input, "第 2 次重试") || !strings.HasSuffix(again.Input, "）\n发早报") {
+		t.Fatalf("notes stacked across retries: %q", again.Input)
+	}
+}
+
+func TestRestartAndRetryNotesDoNotStack(t *testing.T) {
+	retried := retryRequest("a", Request{Input: interruptedNote + "回小林"}, store.RunRecord{Status: store.StatusFail})
+	if strings.Contains(retried.Input, interruptedNote) || strings.Count(retried.Input, retryNotePrefix) != 1 ||
+		!strings.HasSuffix(retried.Input, "）\n回小林") {
+		t.Fatalf("retry of a recovered run: %q", retried.Input)
+	}
+	if got := withInterruptedNote(retried.Input); got != interruptedNote+"回小林" {
+		t.Fatalf("restart of a retry: %q", got)
+	}
+	if got := withInterruptedNote(withInterruptedNote("回小林")); got != interruptedNote+"回小林" {
+		t.Fatalf("restart note stacked: %q", got)
+	}
+}
+
+func TestRetryNoteTruncatesLongReason(t *testing.T) {
+	note := retryNote(store.StatusFail, strings.Repeat("错", retryWhyMax+20), 1)
+	if strings.Count(note, "错") != retryWhyMax || !strings.Contains(note, "…") {
+		t.Fatalf("note = %q", note)
 	}
 }

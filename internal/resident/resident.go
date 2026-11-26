@@ -69,6 +69,18 @@ type Executor struct {
 	Server Server // optional: lets Ensure bring a stopped session back
 	Poll   time.Duration
 	Sleep  func(time.Duration)
+	// Guard is the shell command that runs vigil; when set, claude sessions start with the hook that refuses
+	// calls the owner's ask rules would stop on (see guard.go).
+	Guard string
+}
+
+// agentArgs are the task's own agent arguments, plus the guard for a claude session.
+func (e Executor) agentArgs(t task.Task) []string {
+	args := append([]string(nil), t.Agent.Args...)
+	if t.Agent.Kind == "claude" {
+		args = append(args, GuardArgs(e.Guard, t.ID)...)
+	}
+	return args
 }
 
 func (e Executor) sleep(d time.Duration) {
@@ -108,7 +120,7 @@ func (e Executor) Ensure(ctx context.Context, t task.Task) (herdr.Agent, error) 
 	if err != nil {
 		return herdr.Agent{}, fmt.Errorf("create workspace: %w", err)
 	}
-	err = e.H.StartAgent(ctx, name, t.Agent.Kind, pane, t.Agent.Args)
+	err = e.H.StartAgent(ctx, name, t.Agent.Kind, pane, e.agentArgs(t))
 	for i := 0; i < maxDialogTries && herdr.IsCode(err, herdr.CodeAgentNotReady); i++ {
 		if _, derr := e.resolveDialog(ctx, name); derr != nil {
 			return herdr.Agent{}, derr

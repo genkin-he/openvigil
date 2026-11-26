@@ -30,8 +30,9 @@ type Request struct {
 
 // Outcome is what a headless turn produced.
 type Outcome struct {
-	Denied    []string // allow rules for operations the permission rules refused; allowing them lets a re-run through
-	Refused   []string // "tool：reason" for operations the auto mode classifier refused; no allow rule gets past it
+	Denied    []string  // allow rules for operations the permission rules refused; allowing them lets a re-run through
+	Blocked   []Blocked // each call behind Denied, as the owner needs to see it to decide
+	Refused   []string  // "tool：reason" for operations the auto mode classifier refused; no allow rule gets past it
 	SessionID string
 	FinalText string
 	CostUSD   float64
@@ -191,7 +192,7 @@ func ParseStream(r io.Reader) Outcome {
 			out.FinalText = ev.Result
 			out.IsError = ev.IsError
 			out.CostUSD = ev.CostUSD
-			out.Denied, out.Refused = splitDenials(ev, refusals)
+			out.Denied, out.Blocked, out.Refused = splitDenials(ev, refusals)
 		}
 	})
 	if !sawResult || out.FinalText == "" {
@@ -243,8 +244,18 @@ func resultText(raw json.RawMessage) string {
 	return strings.Join(parts, "\n")
 }
 
-// splitDenials sorts a result's permission denials into rules a re-run could allow and classifier refusals.
-func splitDenials(ev streamEvent, refusals map[string]string) (denied, refused []string) {
+// Blocked is one refused call: the allow rule that would let it through and what the call was.
+type Blocked struct {
+	Rule string // e.g. "Bash(deploycli:*)"
+	What string // "<what it was for>：<command>" for Bash, "<tool> <path>" otherwise; one line, at most blockedMax runes
+}
+
+// blockedMax keeps a blocked command to a line on the owner's card.
+const blockedMax = 160
+
+// splitDenials sorts a result's permission denials into rules a re-run could allow (with the calls behind
+// them) and classifier refusals.
+func splitDenials(ev streamEvent, refusals map[string]string) (denied []string, blocked []Blocked, refused []string) {
 	for _, d := range ev.Denials {
 		if reason, ok := refusals[d.ToolUseID]; ok {
 			if note := d.ToolName + "：" + reason; !slices.Contains(refused, note) {
@@ -252,11 +263,58 @@ func splitDenials(ev streamEvent, refusals map[string]string) (denied, refused [
 			}
 			continue
 		}
-		if rule := AllowRule(d.ToolName, d.ToolInput); rule != "" && !slices.Contains(denied, rule) {
+		rule := AllowRule(d.ToolName, d.ToolInput)
+		if rule == "" {
+			continue
+		}
+		if !slices.Contains(denied, rule) {
 			denied = append(denied, rule)
 		}
+		if b := (Blocked{Rule: rule, What: describeCall(d.ToolName, d.ToolInput)}); !slices.Contains(blocked, b) {
+			blocked = append(blocked, b)
+		}
 	}
-	return denied, refused
+	return denied, blocked, refused
+}
+
+// describeCall says what a refused call did, in the words the agent gave it where it gave any.
+func describeCall(tool string, input json.RawMessage) string {
+	var in struct {
+		Command     string `json:"command"`
+		Description string `json:"description"`
+		FilePath    string `json:"file_path"`
+		Path        string `json:"path"`
+		URL         string `json:"url"`
+	}
+	_ = json.Unmarshal(input, &in)
+	var what string
+	switch {
+	case tool == "Bash" && in.Description != "":
+		what = in.Description + "：" + in.Command
+	case tool == "Bash":
+		what = in.Command
+	default:
+		what = strings.TrimSpace(tool + " " + firstNonEmpty(in.FilePath, in.Path, in.URL))
+	}
+	return oneLine(what, blockedMax)
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// oneLine folds s onto a single line and cuts it to max runes, marking the cut with "…".
+func oneLine(s string, max int) string {
+	s = strings.Join(strings.Fields(strings.ReplaceAll(s, "\\\n", " ")), " ")
+	if r := []rune(s); len(r) > max {
+		return string(r[:max]) + "…"
+	}
+	return s
 }
 
 // AllowRule turns a refused tool call into the narrowest --allowedTools rule that would permit it:
